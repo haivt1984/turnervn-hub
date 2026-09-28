@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v3.2-20260928"
+BUILD_VERSION = "batch-v3.3-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -92,12 +92,6 @@ SOURCES = [
         "name": "Thu Vien Phap Luat",
         "page_url": "https://thuvienphapluat.vn/van-ban-moi",
         "feed_url": "https://thuvienphapluat.vn/rss.xml",
-        "pagination": {
-            "enabled": True,
-            "url_template": "https://thuvienphapluat.vn/van-ban-moi?page={page}",
-            "start_page": 1,
-            "max_pages": 10
-        },
         "category": "Legal & Regulation",
         "content_type": "LEGAL",
         "active": True,
@@ -1954,11 +1948,33 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Safe scheduled batches for MOC and TVPL.
+        # Safe scheduled batches. MOC uses listing pagination; TVPL uses RSS
+        # because its HTML listing currently returns HTTP 403 to the Worker.
         for source_name in ("Ministry of Construction", "Thu Vien Phap Luat"):
             source = next((s for s in SOURCES if s.get("name") == source_name), None)
             if not source:
                 continue
+
+            try:
+                if source_name == "Thu Vien Phap Luat":
+                    await discover_tvpl_rss_batch(env, source)
+                else:
+                    source_id = await get_or_create_source(env, source)
+                    next_page = await get_source_pagination_page(env, source_id, 1)
+                    await discover_moc_batch(
+                        env, source, next_page, DISCOVERY_PAGES_PER_RUN
+                    )
+                    await set_source_pagination_page(
+                        env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
+                    )
+            except Exception as exc:
+                print("scheduled discovery failed:", source_name, str(exc))
+
+            try:
+                await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
+            except Exception as exc:
+                print("scheduled processing failed:", source_name, str(exc))
+
 
             source_id = await get_or_create_source(env, source)
             next_page = await get_source_pagination_page(env, source_id, 1)
