@@ -645,7 +645,8 @@ def discover_html_links(html, base_url, source=None):
     seen = set()
 
     if source and source.get("name") == "Ministry of Construction":
-        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
+        # Match relative or absolute article links; validate the resolved URL below.
+        pattern = r'<a[^>]+href=["\']([^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
     else:
         pattern = r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>'
 
@@ -657,6 +658,11 @@ def discover_html_links(html, base_url, source=None):
             continue
 
         href = canonicalize_url(href)
+
+        if source and source.get("name") == "Ministry of Construction":
+            resolved_path = urlparse(href).path.lower()
+            if "/vn/tin-tuc/" not in resolved_path:
+                continue
 
         if href in seen:
             continue
