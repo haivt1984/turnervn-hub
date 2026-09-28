@@ -50,8 +50,8 @@ MAX_CONTENT_CHARS = 120000
 MAX_DESCRIPTION_CHARS = 1000
 MAX_TITLE_CHARS = 500
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-DISCOVERY_PAGES_PER_RUN = 3
-PROCESS_BATCH_SIZE = 5
+DISCOVERY_PAGES_PER_RUN = 1
+PROCESS_BATCH_SIZE = 3
 
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
@@ -1016,6 +1016,40 @@ async def process_item(env, source, source_id, item):
 # ARTICLE QUEUE
 # ============================================================
 
+async def queue_articles_bulk(env, source_id, urls):
+    clean_urls = []
+    seen = set()
+    for url in urls:
+        key = canonicalize_url(url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        clean_urls.append(key)
+
+    if not clean_urls:
+        return 0
+
+    rows = [{
+        "source_id": source_id,
+        "url": url,
+        "status": "queued",
+        "attempts": 0,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    } for url in clean_urls]
+
+    resp = await sb_request(
+        env,
+        "POST",
+        "/rest/v1/hub_article_queue",
+        rows,
+        {"Prefer": "resolution=ignore-duplicates,return=minimal"},
+    )
+    if not resp.ok:
+        raise RuntimeError("Bulk queue insert failed: " + await resp.text())
+    return len(rows)
+
+
 async def queue_article(env, source_id, url):
     url = canonicalize_url(url)
     if not url:
@@ -1078,9 +1112,14 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
         page_stats.append({"page": page_number, "status": resp.status, "links": len(links)})
         discovered += len(links)
 
-        for url, _ in links:
-            if await queue_article(env, source_id, url):
-                queued += 1
+        try:
+            queued += await queue_articles_bulk(
+                env,
+                source_id,
+                [url for url, _ in links],
+            )
+        except Exception as exc:
+            print("bulk queue failed:", source["name"], str(exc))
 
     return {
         "source": source["name"],
@@ -1424,10 +1463,10 @@ class Default(WorkerEntrypoint):
 
                 if action == "discover":
                     start_page = int((q.get("page") or ["1"])[0])
-                    pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), 5)
+                    pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
                     result = await discover_moc_batch(env, source, start_page, pages)
                 else:
-                    limit = min(int((q.get("limit") or [str(PROCESS_BATCH_SIZE)])[0]), 10)
+                    limit = min(int((q.get("limit") or [str(PROCESS_BATCH_SIZE)])[0]), PROCESS_BATCH_SIZE)
                     result = await process_queue_batch(env, source, limit)
 
                 return Response(
