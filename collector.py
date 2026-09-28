@@ -57,7 +57,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v7.1-20260928"
+BUILD_VERSION = "batch-v7.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -2250,68 +2250,59 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Scheduled safe batches.
-        # MOC = paginated full-content.
-        # TVPL = RSS discovery-only.
-        # Procore/OpenSpace = full-content.
-        # DroneDeploy = discovery-only until full-content extraction is reliable.
-        # Autodesk Construction = public blog full-content.
-        for source_name in (
-            "Ministry of Construction",
-            "Thu Vien Phap Luat",
-            "Procore",
-            "OpenSpace",
-            "DroneDeploy",
-        ):
-            source = next((s for s in SOURCES if s.get("name") == source_name), None)
-            if not source:
-                continue
+    # One deterministic batch per active source. A source reaches "done" only
+    # when its article content passes the quality gate in process_item().
+    # Sources that are known to be blocked by their upstream remain discovery-only.
+    discovery_only = {
+        "Thu Vien Phap Luat",
+        "DroneDeploy",
+        "Autodesk Construction",
+        "Microsoft SharePoint",
+        "Microsoft Power BI",
+    }
 
-            try:
-                if source_name == "Thu Vien Phap Luat":
-                    await discover_tvpl_rss_batch(env, source)
-                elif source_name == "Autodesk Construction":
-                    await discover_autodesk_rss_batch(env, source)
-                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint", "Microsoft Power BI"}:
-                    await discover_tech_blog_batch(env, source)
-                else:
-                    source_id = await get_or_create_source(env, source)
-                    next_page = await get_source_pagination_page(env, source_id, 1)
-                    await discover_moc_batch(
-                        env, source, next_page, DISCOVERY_PAGES_PER_RUN
-                    )
-                    await set_source_pagination_page(
-                        env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
-                    )
-            except Exception as exc:
-                print("scheduled discovery failed:", source_name, str(exc))
+    for source in [s for s in SOURCES if s.get("active")]:
+        source_name = source.get("name")
+        try:
+            if source_name == "Ministry of Construction":
+                source_id = await get_or_create_source(env, source)
+                next_page = await get_source_pagination_page(env, source_id, 1)
+                await discover_moc_batch(
+                    env, source, next_page, DISCOVERY_PAGES_PER_RUN
+                )
+                await set_source_pagination_page(
+                    env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
+                )
+            elif source_name == "Thu Vien Phap Luat":
+                await discover_tvpl_rss_batch(env, source)
+            elif source_name in {
+                "Procore",
+                "OpenSpace",
+                "DroneDeploy",
+                "Autodesk Construction",
+                "Microsoft SharePoint",
+                "Microsoft Power BI",
+            }:
+                await discover_tech_blog_batch(env, source)
+            elif source.get("feed_urls"):
+                items = await crawl_multi_feed_source(source)
+                source_id = await get_or_create_source(env, source)
+                await queue_articles_bulk(env, source_id, items)
+            elif source.get("feed_url"):
+                items = await crawl_rss_source(source)
+                source_id = await get_or_create_source(env, source)
+                await queue_articles_bulk(env, source_id, items)
+            else:
+                source_id = await get_or_create_source(env, source)
+                items = await discover_html_source(env, source)
+                await queue_articles_bulk(env, source_id, items)
+        except Exception as exc:
+            print("scheduled discovery failed:", source_name, str(exc))
 
-            if source_name not in {"Thu Vien Phap Luat", "DroneDeploy"}:
-                try:
-                    await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
-                except Exception as exc:
-                    print("scheduled processing failed:", source_name, str(exc))
+        if source_name in discovery_only:
+            continue
 
-
-            try:
-                if source_name == "Thu Vien Phap Luat":
-                    await discover_tvpl_rss_batch(env, source)
-                elif source_name in {"Procore", "OpenSpace", "DroneDeploy"}:
-                    await discover_tech_blog_batch(env, source)
-                else:
-                    source_id = await get_or_create_source(env, source)
-                    next_page = await get_source_pagination_page(env, source_id, 1)
-                    await discover_moc_batch(
-                        env, source, next_page, DISCOVERY_PAGES_PER_RUN
-                    )
-                    await set_source_pagination_page(
-                        env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
-                    )
-            except Exception as exc:
-                print("scheduled discovery failed:", source_name, str(exc))
-
-            if source_name != "Thu Vien Phap Luat":
-                try:
-                    await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
-                except Exception as exc:
-                    print("scheduled processing failed:", source_name, str(exc))
+        try:
+            await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
+        except Exception as exc:
+            print("scheduled processing failed:", source_name, str(exc))
