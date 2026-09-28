@@ -44,7 +44,7 @@ USER_AGENT = (
     "TurnerVietnamNewsCollector/1.0 "
     "(+https://example.invalid/contact; respectful crawler)"
 )
-REQUEST_TIMEOUT_MS = 15000
+REQUEST_TIMEOUT_MS = 15000  # reserved for future AbortSignal-based timeout handling
 MAX_ARTICLES_PER_SOURCE = 20
 MAX_CONTENT_CHARS = 120000
 MAX_DESCRIPTION_CHARS = 1000
@@ -293,11 +293,8 @@ async def http_get(url, accept="*/*"):
     }
     return await fetch(
         url,
-        {
-            "method": "GET",
-            "headers": headers,
-            "redirect": "follow",
-        },
+        headers=headers,
+        redirect="follow",
     )
 
 
@@ -327,13 +324,18 @@ async def sb_request(env, method, path, body=None, extra_headers=None):
     headers = sb_headers(env)
     if extra_headers:
         headers.update(extra_headers)
-    opts = {
-        "method": method,
-        "headers": headers,
-    }
     if body is not None:
-        opts["body"] = json.dumps(body)
-    return await fetch(sb_url(env, path), opts)
+        return await fetch(
+            sb_url(env, path),
+            method=method,
+            headers=headers,
+            body=json.dumps(body),
+        )
+    return await fetch(
+        sb_url(env, path),
+        method=method,
+        headers=headers,
+    )
 
 
 async def get_or_create_source(env, source):
@@ -434,11 +436,9 @@ async def upload_storage(env, bucket, path, content_bytes, mime_type):
     }
     resp = await fetch(
         url,
-        {
-            "method": "POST",
-            "headers": headers,
-            "body": content_bytes,
-        },
+        method="POST",
+        headers=headers,
+        body=content_bytes,
     )
     if not resp.ok:
         raise RuntimeError("Storage upload failed: " + await resp.text())
