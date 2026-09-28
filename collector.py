@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v3.1-20260928"
+BUILD_VERSION = "batch-v3.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -91,7 +91,7 @@ SOURCES = [
     {
         "name": "Thu Vien Phap Luat",
         "page_url": "https://thuvienphapluat.vn/van-ban-moi",
-        "feed_url": "",
+        "feed_url": "https://thuvienphapluat.vn/rss.xml",
         "pagination": {
             "enabled": True,
             "url_template": "https://thuvienphapluat.vn/van-ban-moi?page={page}",
@@ -983,6 +983,66 @@ async def fetch_html_candidate(url, source):
         "content_type": source.get("content_type", "NEWS"),
     }
 
+async def discover_tvpl_rss_batch(env, source):
+    feed_url = source.get("feed_url")
+    if not feed_url:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": ["TVPL feed_url is not configured"],
+        }
+
+    resp = await http_get(
+        feed_url,
+        "application/rss+xml,application/atom+xml,text/xml,*/*",
+    )
+    if not resp.ok:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [f"RSS HTTP {resp.status}"],
+        }
+
+    xml_text = await response_text(resp)
+    items = parse_feed(xml_text, source["page_url"], source)
+    # Keep only legal-document links when the feed has mixed content.
+    filtered = []
+    for item in items:
+        url = canonicalize_url(item.get("url", ""))
+        if "thuvienphapluat.vn" not in url.lower():
+            continue
+        filtered.append({
+            "url": url,
+            "title": item.get("title"),
+            "published_at": None,
+        })
+        if len(filtered) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+    source_id = await get_or_create_source(env, source)
+    try:
+        queued = await queue_articles_bulk(env, source_id, filtered)
+        return {
+            "source": source["name"],
+            "discovered": len(filtered),
+            "queued": queued,
+            "already_queued": max(len(filtered) - queued, 0),
+            "queue_errors": [],
+        }
+    except Exception as exc:
+        return {
+            "source": source["name"],
+            "discovered": len(filtered),
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [str(exc)],
+        }
+
+
 async def discover_feed_url(source, html=None):
     """
     Discover an RSS/Atom feed advertised by the source page.
@@ -1833,7 +1893,10 @@ class Default(WorkerEntrypoint):
                 if action == "discover":
                     start_page = int((q.get("page") or ["1"])[0])
                     pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
-                    result = await discover_moc_batch(env, source, start_page, pages)
+                    if source.get("name") == "Thu Vien Phap Luat":
+                        result = await discover_tvpl_rss_batch(env, source)
+                    else:
+                        result = await discover_moc_batch(env, source, start_page, pages)
                 else:
                     limit = min(int((q.get("limit") or [str(PROCESS_BATCH_SIZE)])[0]), PROCESS_BATCH_SIZE)
                     result = await process_queue_batch(env, source, limit)
