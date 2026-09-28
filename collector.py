@@ -1458,6 +1458,62 @@ class Default(WorkerEntrypoint):
             requested_source = (q.get("source") or [""])[0].strip()
             action = (q.get("action") or ["run"])[0].strip().lower()
 
+            if action == "inspect":
+                inspect_url = (q.get("url") or [""])[0].strip()
+                if not inspect_url:
+                    return Response(
+                        json.dumps({"status": "error", "error": "Missing url"}),
+                        status=400,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                resp = await http_get(inspect_url, "text/html,application/xhtml+xml")
+                if not resp.ok:
+                    return Response(
+                        json.dumps({
+                            "status": "error",
+                            "error": f"HTTP {resp.status}",
+                            "url": inspect_url
+                        }, indent=2),
+                        status=502,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                html = await response_text(resp)
+                title = extract_title(html)
+                published = extract_published(html)
+                image = extract_image(html, inspect_url)
+
+                interesting = []
+                for m in re.finditer(
+                    r'<([a-z0-9]+)[^>]*(?:class|id)=["\'][^"\']*(?:article|content|detail|news|post|date|time|publish|main)[^"\']*["\'][^>]*>',
+                    html,
+                    flags=re.I,
+                ):
+                    interesting.append(m.group(0)[:500])
+                    if len(interesting) >= 50:
+                        break
+
+                body = find_first([r'<body[^>]*>([\s\S]*?)</body>'], html) or html
+                text_preview = clean_text(body)[:5000]
+
+                return Response(
+                    json.dumps({
+                        "time": now_iso(),
+                        "version": BUILD_VERSION,
+                        "action": "inspect",
+                        "status": "ok",
+                        "url": inspect_url,
+                        "html_length": len(html),
+                        "title": title,
+                        "published": published,
+                        "image": image,
+                        "interesting_tags": interesting,
+                        "text_preview": text_preview,
+                    }, indent=2),
+                    headers={"Content-Type": "application/json"},
+                )
+
             if action in {"discover", "process"}:
                 source_name = requested_source or "Ministry of Construction"
                 matches = [s for s in SOURCES if s.get("name", "").lower() == source_name.lower()]
