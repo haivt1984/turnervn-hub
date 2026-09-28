@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.5-20260928"
+BUILD_VERSION = "batch-v6.0-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1046,6 +1046,8 @@ def discover_tech_blog_links(html, base_url, source_name):
             valid = "/blog/" in path and path != "/blog"
         elif source_name == "Autodesk Construction":
             valid = "/blogs/construction/" in path and path != "/blogs/construction"
+        elif source_name == "Microsoft SharePoint":
+            valid = "/blog/spblog/" in path and "/all-posts" not in path
 
         if not valid:
             continue
@@ -2102,7 +2104,7 @@ class Default(WorkerEntrypoint):
                         result = await discover_tvpl_rss_batch(env, source)
                     elif source.get("name") == "Autodesk Construction":
                         result = await discover_autodesk_rss_batch(env, source)
-                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy"}:
+                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint"}:
                         result = await discover_tech_blog_batch(env, source)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
@@ -2199,7 +2201,7 @@ class Default(WorkerEntrypoint):
                     await discover_tvpl_rss_batch(env, source)
                 elif source_name == "Autodesk Construction":
                     await discover_autodesk_rss_batch(env, source)
-                elif source_name in {"Procore", "OpenSpace", "DroneDeploy"}:
+                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint"}:
                     await discover_tech_blog_batch(env, source)
                 else:
                     source_id = await get_or_create_source(env, source)
