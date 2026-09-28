@@ -1091,40 +1091,35 @@ function closeArticlePage(pushState = true) {
 
     async function loadFromSupabase() {
       if (!supabaseClient) {
-        $("syncStatus").textContent = "Supabase not configured";
+        $("syncStatus").textContent = uiLanguage === "vi" ? "Chưa cấu hình Supabase" : "Supabase not configured";
         return;
       }
 
-      $("syncStatus").textContent = "Syncing...";
+      $("syncStatus").textContent = uiLanguage === "vi" ? "Đang đồng bộ..." : "Syncing...";
       try {
-        const { data, error } = await supabaseClient
+        const { data: articleRows, error: articleError } = await supabaseClient
           .from("hub_articles")
-          .select(`
-            id,
-            source_id,
-            title,
-            url,
-            description,
-            content,
-            author,
-            published_at,
-            crawled_at,
-            category,
-            image_url,
-            ai_summary,
-            relevance,
-            hub_sources (
-              name
-            )
-          `)
+          .select("id,source_id,title,url,description,content,author,published_at,crawled_at,category,image_url,ai_summary,relevance")
           .order("crawled_at", { ascending: false, nullsFirst: false })
           .limit(500);
 
-        if (error) throw error;
+        if (articleError) {
+          throw new Error("hub_articles: " + (articleError.message || "Unknown error") + (articleError.code ? " [" + articleError.code + "]" : ""));
+        }
 
-        allArticles = (data || []).map(item => ({
+        const { data: sourceRows, error: sourceError } = await supabaseClient
+          .from("hub_sources")
+          .select("id,name");
+
+        if (sourceError) {
+          throw new Error("hub_sources: " + (sourceError.message || "Unknown error") + (sourceError.code ? " [" + sourceError.code + "]" : ""));
+        }
+
+        const sourceMap = Object.fromEntries((sourceRows || []).map(s => [String(s.id), s.name]));
+
+        allArticles = (articleRows || []).map(item => ({
           ...item,
-          source_name: item.hub_sources?.name || "Unknown source"
+          source_name: sourceMap[String(item.source_id)] || "Unknown source"
         }));
 
         buildFilters();
@@ -1135,16 +1130,14 @@ function closeArticlePage(pushState = true) {
         const directArticleId = new URL(window.location.href).searchParams.get("article");
         if (directArticleId) openArticle(directArticleId, false);
 
-        $("syncStatus").textContent =
-          `Synced · ${formatDate(new Date().toISOString())}`;
-        $("lastRefresh").textContent =
-          formatDate(new Date().toISOString());
+        const stamp = new Date().toISOString();
+        $("syncStatus").textContent = (uiLanguage === "vi" ? "Đã đồng bộ · " : "Synced · ") + formatDate(stamp);
+        $("lastRefresh").textContent = formatDate(stamp);
       } catch (err) {
         console.error("Supabase load error:", err);
-        $("syncStatus").textContent = "Sync error";
-        $("lastRefresh").textContent =
-          formatDate(new Date().toISOString());
-        toast("Supabase could not be loaded. Check RLS and the anon key.");
+        $("syncStatus").textContent = uiLanguage === "vi" ? "Lỗi đồng bộ" : "Sync error";
+        $("lastRefresh").textContent = formatDate(new Date().toISOString());
+        toast((uiLanguage === "vi" ? "Không thể tải dữ liệu Supabase: " : "Supabase load failed: ") + (err?.message || "Unknown error"));
       }
     }
 
