@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v6.0-20260928"
+BUILD_VERSION = "batch-v6.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
