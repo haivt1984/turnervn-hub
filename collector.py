@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.0-20260928"
+BUILD_VERSION = "batch-v5.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1024,8 +1024,32 @@ def discover_tech_blog_links(html, base_url, source_name):
 
 
 async def discover_tech_blog_batch(env, source):
-    page_url = source.get("page_url")
-    resp = await http_get(page_url, "text/html,application/xhtml+xml")
+    defaults = {
+        "Procore": "https://www.procore.com/blog",
+        "OpenSpace": "https://www.openspace.ai/blog/",
+        "DroneDeploy": "https://www.dronedeploy.com/blog",
+    }
+    page_url = source.get("page_url") or defaults.get(source.get("name"), "")
+    if not page_url:
+        return {
+            "source": source.get("name", ""),
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": ["No discovery URL configured"],
+        }
+
+    try:
+        resp = await http_get(page_url, "text/html,application/xhtml+xml")
+    except Exception as exc:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [f"Discovery fetch error: {exc}"],
+        }
+
     if not resp.ok:
         return {
             "source": source["name"],
@@ -1038,6 +1062,7 @@ async def discover_tech_blog_batch(env, source):
     html = await response_text(resp)
     links = discover_tech_blog_links(html, page_url, source["name"])
     source_id = await get_or_create_source(env, source)
+
     try:
         queued = await queue_articles_bulk(env, source_id, links)
         return {
@@ -1055,6 +1080,8 @@ async def discover_tech_blog_batch(env, source):
             "already_queued": 0,
             "queue_errors": [str(exc)],
         }
+
+
 
 
 async def discover_tvpl_rss_batch(env, source):
