@@ -57,7 +57,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v7.0-20260928"
+BUILD_VERSION = "batch-v7.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -771,7 +771,7 @@ def extract_dronedeploy_main_text(html):
 def extract_jsonld_article_body(html):
     bodies = []
     for match in re.finditer(
-        r'<script[^>]+type=["\']application/ld\\+json["\'][^>]*>([\\s\\S]*?)</script>',
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
         html,
         flags=re.I,
     ):
@@ -800,7 +800,7 @@ def content_quality(content):
     text = clean_text(content)
     if len(text) < MIN_CONTENT_CHARS:
         return False, len(text)
-    words = re.findall(r"\\b[A-Za-zÀ-ỹĐđ0-9]{3,}\\b", text)
+    words = re.findall(r"\b[A-Za-zÀ-ỹĐđ0-9]{3,}\b", text)
     if len(words) < 120:
         return False, len(text)
     return True, len(text)
@@ -813,10 +813,10 @@ def extract_main_text(html):
 
     candidates = []
     patterns = [
-        r"<article\\b[^>]*>([\\s\\S]*?)</article>",
-        r"<main\\b[^>]*>([\\s\\S]*?)</main>",
-        r'<div\\b[^>]*(?:id|class)=["\'][^"\']*(?:article-body|article-content|article_content|post-content|post-body|entry-content|blog-post|rich-text|richtext|content-body|news-content)[^"\']*["\'][^>]*>([\\s\\S]*?)</div>',
-        r'<section\\b[^>]*(?:id|class)=["\'][^"\']*(?:article|post|content|entry)[^"\']*["\'][^>]*>([\\s\\S]*?)</section>',
+        r"<article\b[^>]*>([\s\S]*?)</article>",
+        r"<main\b[^>]*>([\s\S]*?)</main>",
+        r'<div\b[^>]*(?:id|class)=["\'][^"\']*(?:article-body|article-content|article_content|post-content|post-body|entry-content|blog-post|rich-text|richtext|content-body|news-content)[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+        r'<section\b[^>]*(?:id|class)=["\'][^"\']*(?:article|post|content|entry)[^"\']*["\'][^>]*>([\s\S]*?)</section>',
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, html, flags=re.I):
@@ -831,8 +831,8 @@ def extract_main_text(html):
         candidates.sort(key=lambda item: item[0], reverse=True)
         return truncate(candidates[0][1], MAX_CONTENT_CHARS)
 
-    body = find_first([r"<body[^>]*>([\\s\\S]*?)</body>"], html)
-    body = re.sub(r"<(nav|header|footer|aside|script|style|noscript|form)[^>]*>[\\s\\S]*?</\\1>", " ", body, flags=re.I)
+    body = find_first([r"<body[^>]*>([\s\S]*?)</body>"], html)
+    body = re.sub(r"<(nav|header|footer|aside|script|style|noscript|form)[^>]*>[\s\S]*?</\1>", " ", body, flags=re.I)
     return truncate(clean_text(body), MAX_CONTENT_CHARS)
 
 
