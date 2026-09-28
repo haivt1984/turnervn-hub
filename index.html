@@ -315,6 +315,28 @@
     }
     .toast.show{display:block}
 
+    .article-page{
+      display:none;
+      max-width:960px;
+      margin:24px auto 60px;
+      background:#fff;
+      border:1px solid var(--line);
+      border-radius:20px;
+      overflow:hidden;
+      box-shadow:var(--shadow)
+    }
+    .article-page.open{display:block}
+    .article-page-hero{width:100%;max-height:520px;object-fit:cover;background:#e8edf3}
+    .article-page-body{padding:34px 42px 44px}
+    .article-page h1{font-size:34px;line-height:1.18;letter-spacing:-.025em;margin:12px 0}
+    .article-page-content{font-size:16px;line-height:1.85;color:#344054;white-space:pre-wrap;margin-top:26px}
+    .article-page-summary{margin:24px 0;padding:18px;border-radius:14px;background:#f8fbff;border:1px solid #d8e7fb}
+    .article-page-summary h4{margin:0 0 8px;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+    .back-link{border:0;background:none;padding:0;color:var(--blue);font-weight:800;margin-bottom:16px}
+    .article-page-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:30px}
+    body.reading-mode .container{display:none}
+    body.reading-mode footer{display:none}
+
     @media(max-width:1050px){
       nav{display:none}
       .layout{grid-template-columns:1fr}
@@ -337,6 +359,10 @@
       .sidebar{display:flex}
       .modal-hero{height:220px}
       .modal-title{font-size:22px}
+      .article-page{margin:12px;border-radius:14px}
+      .article-page-body{padding:22px 18px 30px}
+      .article-page h1{font-size:26px}
+      .article-page-content{font-size:15px}
       .footer-inner{flex-direction:column}
     }
   </style>
@@ -491,7 +517,29 @@
     </div>
   </footer>
 
-  <div class="modal" id="articleModal" aria-hidden="true">
+  <main class="article-page" id="articlePage">
+    <img class="article-page-hero" id="pageImage" src="" alt="" />
+    <div class="article-page-body">
+      <button class="back-link" id="backToNewsBtn">← Quay lại tin tức / Back to News</button>
+      <div class="chips" id="pageChips"></div>
+      <h1 id="pageTitle"></h1>
+      <div class="article-meta" id="pageMeta"></div>
+
+      <div class="article-page-summary" id="pageSummaryBox">
+        <h4>Tóm tắt / Summary</h4>
+        <div id="pageSummary"></div>
+      </div>
+
+      <div class="article-page-content" id="pageContent"></div>
+
+      <div class="article-page-actions">
+        <button class="primary" id="pageSourceBtn">Đọc nguồn gốc / Original Source</button>
+        <button class="secondary" id="pageBackBtn">← Quay lại / Back</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal" id="articleModal" aria-hidden="true" style="display:none!important">
     <div class="modal-card">
       <img class="modal-hero" id="modalImage" src="" alt="" />
       <div class="modal-body">
@@ -884,23 +932,22 @@
       $("feedSub").textContent = item[1];
     }
 
-    function openArticle(id) {
+    function openArticle(id, pushState = true) {
       const article = allArticles.find(a => String(a.id) === String(id));
       if (!article) return;
       selectedArticle = article;
 
-      $("modalImage").src = article.image_url || placeholderImage();
-      $("modalImage").onerror = () => $("modalImage").src = placeholderImage();
+      $("pageImage").src = article.image_url || placeholderImage();
+      $("pageImage").onerror = () => $("pageImage").src = placeholderImage();
 
-      $("modalChips").innerHTML = `
+      $("pageChips").innerHTML = `
         <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || "General")}</span>
-        ${article.relevance === "high" ? `<span class="chip red">TURNER RELEVANT</span>` : ""}
+        ${article.relevance === "high" ? '<span class="chip red">TURNER RELEVANT</span>' : ""}
       `;
 
-      $("modalTitle").textContent = article.title;
-
-      $("modalMeta").innerHTML = `
-        <span class="source">${escapeHtml(article.source_name || "Unknown source")}</span>
+      $("pageTitle").textContent = article.title;
+      $("pageMeta").innerHTML = `
+        <span class="source">Nguồn / Source: ${escapeHtml(article.source_name || "Unknown source")}</span>
         <span>·</span>
         <span>${escapeHtml(formatDate(article.published_at))}</span>
         ${article.author ? `<span>·</span><span>${escapeHtml(article.author)}</span>` : ""}
@@ -908,19 +955,36 @@
         ${relevanceHtml(article.relevance)}
       `;
 
-      $("modalSummary").textContent =
-        article.ai_summary ||
-        article.description ||
-        "No AI summary available.";
+      const summary = article.ai_summary || article.description || "";
+      $("pageSummary").textContent = summary;
+      $("pageSummaryBox").style.display = summary ? "block" : "none";
 
-      $("modalContent").textContent =
+      $("pageContent").textContent =
         article.content ||
         article.description ||
-        "The full article body is not stored in the current record. Use the original source link below.";
+        "Nội dung đầy đủ chưa được lưu. Vui lòng đọc tại nguồn gốc.";
 
-      $("articleModal").classList.add("open");
-      $("articleModal").setAttribute("aria-hidden","false");
-      document.body.style.overflow = "hidden";
+      document.body.classList.add("reading-mode");
+      $("articlePage").classList.add("open");
+
+      if (pushState) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("article", article.id);
+        history.pushState({articleId: article.id}, "", url);
+      }
+      window.scrollTo({top:0, behavior:"smooth"});
+    }
+
+    function closeArticlePage(pushState = true) {
+      $("articlePage").classList.remove("open");
+      document.body.classList.remove("reading-mode");
+      selectedArticle = null;
+      if (pushState) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("article");
+        history.pushState({}, "", url);
+      }
+      window.scrollTo({top:0, behavior:"smooth"});
     }
 
     function closeModal() {
@@ -980,6 +1044,9 @@
         updateStats();
         updateFeedTitle();
         renderFeed();
+
+        const directArticleId = new URL(window.location.href).searchParams.get("article");
+        if (directArticleId) openArticle(directArticleId, false);
 
         $("syncStatus").textContent =
           `Synced · ${formatDate(new Date().toISOString())}`;
@@ -1073,6 +1140,20 @@
 
     document.addEventListener("keydown", e => {
       if (e.key === "Escape") closeModal();
+    });
+
+    $("backToNewsBtn").addEventListener("click", () => closeArticlePage());
+    $("pageBackBtn").addEventListener("click", () => closeArticlePage());
+    $("pageSourceBtn").addEventListener("click", () => {
+      if (selectedArticle?.url) {
+        window.open(selectedArticle.url, "_blank", "noopener,noreferrer");
+      }
+    });
+
+    window.addEventListener("popstate", () => {
+      const id = new URL(window.location.href).searchParams.get("article");
+      if (id) openArticle(id, false);
+      else closeArticlePage(false);
     });
 
     // Initial render
