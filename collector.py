@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.8-20260928"
+BUILD_VERSION = "batch-v1.9-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,41 +623,45 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # Read the article's own timestamp, not the site's header date.
-    patterns = [
-        r'<span[^>]*class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</span>',
-        r'<[^>]+class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</[^>]+>',
+    # The visible article timestamp is located immediately after
+    # the News_Detail_Title and before the article description.
+    # Extract a bounded article-header slice first; this avoids the
+    # site's current date shown in the global header.
+    title_pos = html.find("News_Detail_Title")
+    desc_positions = [
+        p for p in (
+            html.find("divArticleDescription1"),
+            html.find("divArticleDescription2"),
+            html.find("divArticleDescription3"),
+        ) if p >= 0
     ]
+    desc_pos = min(desc_positions) if desc_positions else -1
 
-    raw = None
-    for pattern in patterns:
-        m = re.search(pattern, html, flags=re.I)
-        if m:
-            raw = m.group(1)
-            break
+    if title_pos >= 0:
+        end_pos = desc_pos if desc_pos > title_pos else min(len(html), title_pos + 12000)
+        header_html = html[title_pos:end_pos]
+    else:
+        header_html = html
 
-    if raw:
-        text = clean_text(unescape(raw))
-        m = re.search(
-            r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
-            r'(?:\s+(\d{1,2})\s*:\s*(\d{2}))?',
-            text
-        )
-        if m:
-            day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            hour = int(m.group(4) or 0)
-            minute = int(m.group(5) or 0)
-            try:
-                # MOC displays Vietnam local time (UTC+7).
-                return datetime(
-                    year, month, day, hour, minute,
-                    tzinfo=timezone(timedelta(hours=7))
-                ).isoformat()
-            except Exception:
-                pass
+    header_text = clean_text(unescape(header_html))
 
-    # Do NOT fall back to generic page dates because MOC pages contain
-    # a current site/header date that can be mistaken for publication date.
+    # MOC displays values such as: "Thứ tư, 23/09/2026 15:55".
+    matches = re.findall(
+        r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
+        r'\s+(\d{1,2})\s*:\s*(\d{2})',
+        header_text,
+    )
+
+    if matches:
+        try:
+            day, month, year, hour, minute = [int(x) for x in matches[-1]]
+            return datetime(
+                year, month, day, hour, minute,
+                tzinfo=timezone(timedelta(hours=7)),
+            ).isoformat()
+        except Exception:
+            pass
+
     return None
 
 
