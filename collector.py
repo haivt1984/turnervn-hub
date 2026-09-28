@@ -50,11 +50,13 @@ MAX_CONTENT_CHARS = 120000
 MAX_DESCRIPTION_CHARS = 1000
 MAX_TITLE_CHARS = 500
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+DISCOVERY_PAGES_PER_RUN = 3
+PROCESS_BATCH_SIZE = 5
 
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "moc-pagination-v4-20260928"
+BUILD_VERSION = "batch-v1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1025,6 +1027,134 @@ async def process_item(env, source, source_id, item):
 
 
 # ============================================================
+# ARTICLE QUEUE
+# ============================================================
+
+async def queue_article(env, source_id, url):
+    url = canonicalize_url(url)
+    if not url:
+        return False
+    body = {
+        "source_id": source_id,
+        "url": url,
+        "status": "queued",
+        "attempts": 0,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    resp = await sb_request(
+        env, "POST", "/rest/v1/hub_article_queue",
+        body, {"Prefer": "resolution=ignore-duplicates,return=minimal"}
+    )
+    return resp.ok
+
+
+async def get_queue_batch(env, source_id, limit=PROCESS_BATCH_SIZE):
+    path = (
+        "/rest/v1/hub_article_queue"
+        "?select=id,source_id,url,status,attempts"
+        f"&source_id=eq.{source_id}"
+        "&status=eq.queued"
+        "&order=id.asc"
+        f"&limit={int(limit)}"
+    )
+    resp = await sb_request(env, "GET", path)
+    if not resp.ok:
+        raise RuntimeError("Queue read failed: " + await resp.text())
+    return await resp.json()
+
+
+async def update_queue_item(env, queue_id, values):
+    values["updated_at"] = now_iso()
+    path = "/rest/v1/hub_article_queue?id=eq." + str(queue_id)
+    resp = await sb_request(env, "PATCH", path, values, {"Prefer": "return=minimal"})
+    if not resp.ok:
+        raise RuntimeError("Queue update failed: " + await resp.text())
+
+
+async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PER_RUN):
+    source_id = await get_or_create_source(env, source)
+    config = source.get("pagination") or {}
+    template = config.get("url_template", "")
+    discovered = 0
+    queued = 0
+    page_stats = []
+
+    for page_number in range(start_page, start_page + pages):
+        page_url = template.format(page=page_number)
+        resp = await http_get(page_url, "text/html,application/xhtml+xml")
+        if not resp.ok:
+            page_stats.append({"page": page_number, "status": resp.status, "links": 0})
+            continue
+
+        html = await response_text(resp)
+        links = discover_moc_article_links(html, page_url)
+        page_stats.append({"page": page_number, "status": resp.status, "links": len(links)})
+        discovered += len(links)
+
+        for url, _ in links:
+            if await queue_article(env, source_id, url):
+                queued += 1
+
+    return {
+        "source": source["name"],
+        "start_page": start_page,
+        "pages": pages,
+        "discovered": discovered,
+        "queued_attempts": queued,
+        "page_stats": page_stats,
+    }
+
+
+async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
+    source_id = await get_or_create_source(env, source)
+    rows = await get_queue_batch(env, source_id, limit)
+    done = 0
+    failed = 0
+    new_count = 0
+    duplicates = 0
+    images_stored = 0
+
+    for row in rows:
+        qid = row["id"]
+        attempts = int(row.get("attempts") or 0) + 1
+        try:
+            await update_queue_item(env, qid, {"status": "processing", "attempts": attempts})
+            item = await fetch_html_candidate(row["url"], source)
+            result = await process_item(env, source, source_id, item)
+
+            if result["status"] == "new":
+                new_count += 1
+                if result.get("stored_image_url"):
+                    images_stored += 1
+            elif result["status"] == "duplicate":
+                duplicates += 1
+
+            await update_queue_item(env, qid, {
+                "status": "done",
+                "processed_at": now_iso(),
+                "last_error": None,
+            })
+            done += 1
+        except Exception as exc:
+            await update_queue_item(env, qid, {
+                "status": "failed" if attempts >= 3 else "queued",
+                "last_error": truncate(str(exc), 2000),
+            })
+            failed += 1
+
+    return {
+        "source": source["name"],
+        "selected": len(rows),
+        "done": done,
+        "failed": failed,
+        "new": new_count,
+        "duplicates": duplicates,
+        "images_stored": images_stored,
+    }
+
+
+# ============================================================
 # SOURCE CRAWLING
 # ============================================================
 
@@ -1292,6 +1422,36 @@ class Default(WorkerEntrypoint):
 
             q = parse_qs(urlparse(url).query)
             requested_source = (q.get("source") or [""])[0].strip()
+            action = (q.get("action") or ["run"])[0].strip().lower()
+
+            if action in {"discover", "process"}:
+                source_name = requested_source or "Ministry of Construction"
+                matches = [s for s in SOURCES if s.get("name", "").lower() == source_name.lower()]
+                if not matches:
+                    return Response(
+                        json.dumps({"status": "error", "error": "Unknown source", "source": source_name}),
+                        status=404,
+                        headers={"Content-Type": "application/json"},
+                    )
+                source = matches[0]
+
+                if action == "discover":
+                    start_page = int((q.get("page") or ["1"])[0])
+                    pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), 5)
+                    result = await discover_moc_batch(env, source, start_page, pages)
+                else:
+                    limit = min(int((q.get("limit") or [str(PROCESS_BATCH_SIZE)])[0]), 10)
+                    result = await process_queue_batch(env, source, limit)
+
+                return Response(
+                    json.dumps({
+                        "time": now_iso(),
+                        "version": BUILD_VERSION,
+                        "action": action,
+                        "result": result,
+                    }, indent=2),
+                    headers={"Content-Type": "application/json"},
+                )
 
             if requested_source:
                 matches = [s for s in SOURCES if s.get("name", "").lower() == requested_source.lower()]
@@ -1336,5 +1496,8 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Cloudflare Cron Triggers invoke this method.
-        await run_collector(env)
+        # Safe scheduled batch: discover a few MOC pages, then process a few queued articles.
+        moc = next((s for s in SOURCES if s.get("name") == "Ministry of Construction"), None)
+        if moc:
+            await discover_moc_batch(env, moc, 1, DISCOVERY_PAGES_PER_RUN)
+            await process_queue_batch(env, moc, PROCESS_BATCH_SIZE)
