@@ -67,7 +67,7 @@ SOURCES = [
         "feed_url": "",
         "pagination": {
             "enabled": True,
-            "url_template": "https://moc.gov.vn/vn/chuyen-muc/1173/tin-hoat-dong.aspx?page={page}",
+            "url_template": "https://moc.gov.vn/vn/Pages/chuyenmuctin.aspx?ChuyenmucID=1173&page={page}&tieude=tin-hoat-dong.aspx",
             "start_page": 1,
             "max_pages": 60
         },
@@ -642,29 +642,39 @@ def extract_main_text(html):
 
 def discover_moc_article_links(html, base_url):
     """
-    MOC-specific discovery that scans href attributes directly.
-    It does not depend on the exact HTML nesting/anchor markup.
+    MOC-specific discovery. The site uses detail pages such as:
+      /vn/Pages/chitiettin.aspx?ChuyenmucID=1173&IDNews=97064...
+    and some section URLs under /vn/tin-tuc/.
     """
     links = []
     seen = set()
 
-    for m in re.finditer(r'href\\s*=\\s*["\\']([^"\\']+\\.aspx(?:\\?[^"\\']*)?)["\\']', html, flags=re.I):
+    href_pattern = r'href\\s*=\\s*["\\']([^"\\']+)["\\']'
+    for m in re.finditer(href_pattern, html, flags=re.I):
         href = urljoin(base_url, m.group(1))
         if not href.startswith(("http://", "https://")):
             continue
 
-        href = canonicalize_url(href)
         parsed = urlparse(href)
-
         if parsed.netloc.lower() not in {"moc.gov.vn", "www.moc.gov.vn"}:
             continue
 
         path = parsed.path.lower()
-        if "/vn/tin-tuc/" not in path:
+        is_detail = (
+            "/vn/pages/chitiettin.aspx" in path
+            or ("/vn/tin-tuc/" in path and path.endswith(".aspx"))
+        )
+
+        if not is_detail:
             continue
 
+        if "/vn/pages/chitiettin.aspx" in path and "idnews=" not in parsed.query.lower():
+            continue
+
+        href = canonicalize_url(href)
         if href in seen:
             continue
+
         seen.add(href)
         links.append((href, ""))
 
