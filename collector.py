@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.1-20260928"
+BUILD_VERSION = "batch-v2.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -842,24 +842,48 @@ def discover_html_links(html, base_url, source=None):
 
 
 async def fetch_html_candidate(url, source):
-    resp = await http_get(url, "text/html,application/xhtml+xml")
+    original_url = url
+    fetch_url = url
+
+    # MOC has two URL formats. Some /vn/tin-tuc/... URLs can return HTTP 500
+    # from automated clients, while the site's legacy detail endpoint works.
+    if source.get("name") == "Ministry of Construction":
+        parsed = urlparse(url)
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 4 and parts[0].lower() == "vn" and parts[1].lower() == "tin-tuc":
+            category_id = parts[2]
+            news_id = parts[3]
+            slug = parts[4] if len(parts) >= 5 else ""
+            if category_id.isdigit() and news_id.isdigit():
+                legacy_base = urljoin(
+                    url,
+                    "/vn/Pages/chitiettin.aspx"
+                )
+                fetch_url = (
+                    legacy_base
+                    + "?ChuyenmucID=" + category_id
+                    + "&IDNews=" + news_id
+                    + "&tieude=" + slug
+                )
+
+    resp = await http_get(fetch_url, "text/html,application/xhtml+xml")
     if not resp.ok:
         raise RuntimeError(f"HTTP {resp.status}")
+
     html = await response_text(resp)
     is_moc = source.get("name") == "Ministry of Construction"
 
     return {
         "title": extract_title(html),
-        "url": canonicalize_url(url),
+        "url": canonicalize_url(original_url),
         "description": extract_description(html),
         "author": extract_author(html),
         "published_at": extract_moc_published(html) if is_moc else extract_published(html),
-        "image_url": extract_moc_image(html, url) if is_moc else extract_image(html, url),
+        "image_url": extract_moc_image(html, fetch_url) if is_moc else extract_image(html, fetch_url),
         "content": extract_moc_main_text(html) if is_moc else extract_main_text(html),
         "category": source.get("category", "General"),
         "content_type": source.get("content_type", "NEWS"),
     }
-
 
 async def discover_feed_url(source, html=None):
     """
