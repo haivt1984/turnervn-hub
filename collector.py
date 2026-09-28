@@ -642,16 +642,17 @@ def extract_main_text(html):
 
 def discover_moc_article_links(html, base_url):
     """
-    MOC-specific discovery. The site uses detail pages such as:
-      /vn/Pages/chitiettin.aspx?ChuyenmucID=1173&IDNews=97064...
-    and some section URLs under /vn/tin-tuc/.
+    Robust MOC-specific link discovery.
+    Accepts standard href spacing and resolves relative URLs.
+    Supports both modern /vn/tin-tuc/*.aspx and legacy
+    /vn/Pages/chitiettin.aspx?...&IDNews=... detail links.
     """
     links = []
     seen = set()
+    href_pattern = r"""href\s*=\s*["']([^"']+)["']"""
 
-    href_pattern = r'href\s*=\s*["\']([^"\']+)["\']'
     for m in re.finditer(href_pattern, html, flags=re.I):
-        href = urljoin(base_url, m.group(1))
+        href = urljoin(base_url, m.group(1).strip())
         if not href.startswith(("http://", "https://")):
             continue
 
@@ -660,15 +661,13 @@ def discover_moc_article_links(html, base_url):
             continue
 
         path = parsed.path.lower()
+        query = parsed.query.lower()
+
         is_detail = (
-            "/vn/pages/chitiettin.aspx" in path
+            ("/vn/pages/chitiettin.aspx" in path and "idnews=" in query)
             or ("/vn/tin-tuc/" in path and path.endswith(".aspx"))
         )
-
         if not is_detail:
-            continue
-
-        if "/vn/pages/chitiettin.aspx" in path and "idnews=" not in parsed.query.lower():
             continue
 
         href = canonicalize_url(href)
@@ -1041,10 +1040,8 @@ async def crawl_pagination_source(source):
     results = []
     seen = set()
     start_page = int(config.get("start_page", 1))
-    max_pages = int(config.get("max_pages", 20))
+    max_pages = int(config.get("max_pages", 60))
     template = config.get("url_template", "")
-
-    consecutive_empty = 0
 
     for page_number in range(start_page, start_page + max_pages):
         if len(results) >= MAX_ARTICLES_PER_SOURCE:
@@ -1055,26 +1052,15 @@ async def crawl_pagination_source(source):
         try:
             resp = await http_get(page_url, "text/html,application/xhtml+xml")
             if not resp.ok:
-                print("pagination page failed:", source["name"], page_number, resp.status)
+                print("MOC pagination HTTP", page_number, resp.status)
                 continue
 
             html = await response_text(resp)
-            if source.get("name") == "Ministry of Construction":
-                links = discover_moc_article_links(html, page_url)
-            else:
-                links = discover_html_links(html, page_url, source)
+            links = discover_moc_article_links(html, page_url)
 
-            if not links:
-                consecutive_empty += 1
-                if consecutive_empty >= 2:
-                    break
-                continue
-            consecutive_empty = 0
-
-            page_new = 0
             for url, label in links:
                 key = canonicalize_url(url)
-                if key in seen:
+                if not key or key in seen:
                     continue
                 seen.add(key)
 
@@ -1084,21 +1070,16 @@ async def crawl_pagination_source(source):
                         item["title"] = truncate(label, MAX_TITLE_CHARS)
                     if item.get("title"):
                         results.append(item)
-                        page_new += 1
                 except Exception as exc:
-                    print("pagination article failed:", source["name"], url, str(exc))
+                    print("MOC pagination article failed:", url, str(exc))
 
                 if len(results) >= MAX_ARTICLES_PER_SOURCE:
                     break
 
-            if page_new == 0 and page_number > start_page:
-                break
-
         except Exception as exc:
-            print("pagination error:", source["name"], page_number, str(exc))
+            print("MOC pagination page error:", page_number, str(exc))
 
     source["_pagination_found"] = len(results)
-    source["_pagination_pages_visited"] = max_pages
     return results[:MAX_ARTICLES_PER_SOURCE]
 
 
