@@ -1131,7 +1131,7 @@ async def crawl_one_source(env, source):
         if source.get("feed_urls"):
             items.extend(await crawl_multi_feed_source(source))
 
-        if source.get("pagination", {}).get("enabled"):
+        if source.get("name") == "Ministry of Construction" or source.get("pagination", {}).get("enabled"):
             pagination_items = await crawl_pagination_source(source)
             seen_urls = {canonicalize_url(x.get("url", "")) for x in items}
             for item in pagination_items:
@@ -1265,6 +1265,14 @@ class Default(WorkerEntrypoint):
                     "status": "ok",
                     "time": now_iso(),
                     "sources_configured": len([s for s in SOURCES if s.get("active", True)]),
+                    "moc_pagination_enabled": any(
+                        s.get("name") == "Ministry of Construction" for s in SOURCES
+                    ),
+                    "moc_pagination_config": next(
+                        (s.get("pagination", {}) for s in SOURCES
+                         if s.get("name") == "Ministry of Construction"),
+                        {}
+                    ),
                     "cron": CRON_SCHEDULE,
                     "message": "Collector is deployed. Scheduled runs are handled by Cloudflare Cron.",
                 }
@@ -1309,6 +1317,10 @@ class Default(WorkerEntrypoint):
                         "pagination_found": result.get("pagination_found", 0),
                         "pagination_pages_visited": result.get("pagination_pages_visited", 0),
                         "pagination_raw_links_seen": result.get("pagination_raw_links_seen", 0),
+                        "pagination_config_enabled": bool(
+                            result.get("pagination_found", 0)
+                            or result.get("pagination_pages_visited", 0)
+                        ),
                     }, "sources": [result]}, indent=2),
                     headers={"Content-Type": "application/json"},
                 )
