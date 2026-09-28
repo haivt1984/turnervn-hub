@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.3-20260928"
+BUILD_VERSION = "batch-v2.4-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,38 +623,28 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # MOC renders the article date in the visible text immediately after
-    # the article title. Use text order rather than fragile DOM nesting.
-    title = clean_text(extract_title(html))
+    # MOC article pages expose the publication timestamp in visible text as
+    # DD/MM/YYYY HH:MM. The global site date has no time component, so this
+    # avoids confusing the header date with the article publication date.
     page_text = clean_text(unescape(html))
-
-    search_start = 0
-    if title:
-        title_pos = page_text.find(title)
-        if title_pos >= 0:
-            search_start = title_pos + len(title)
-
-    window = page_text[search_start:search_start + 5000]
-
-    match = re.search(
-        r'(?:Thứ[^,]*,\s*)?'
+    matches = re.findall(
         r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
         r'\s+(\d{1,2})\s*:\s*(\d{2})',
-        window,
+        page_text,
         flags=re.I,
     )
 
-    if not match:
-        return None
+    for values in reversed(matches):
+        day, month, year, hour, minute = [int(x) for x in values]
+        try:
+            return datetime(
+                year, month, day, hour, minute,
+                tzinfo=timezone(timedelta(hours=7)),
+            ).isoformat()
+        except Exception:
+            continue
 
-    try:
-        day, month, year, hour, minute = [int(x) for x in match.groups()]
-        return datetime(
-            year, month, day, hour, minute,
-            tzinfo=timezone(timedelta(hours=7)),
-        ).isoformat()
-    except Exception:
-        return None
+    return None
 
 
 def extract_moc_main_text(html):
