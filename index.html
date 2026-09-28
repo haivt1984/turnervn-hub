@@ -824,7 +824,7 @@
                   <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || "General")}</span>
                   ${article.relevance === "high" ? `<span class="chip red">TURNER RELEVANT</span>` : ""}
                 </div>
-                <div class="date">${escapeHtml(formatDate(articleDate(article))}</div>
+                <div class="date">${escapeHtml(formatDate(articleDate(article)))}</div>
               </div>
 
               <h3>
@@ -1043,6 +1043,11 @@
       $("pageSummary").textContent = summary;
       $("pageSummaryBox").style.display = summary ? "block" : "none";
       $("pageContent").textContent = content;
+
+      const sourceName = article.source_name || (uiLanguage === "vi" ? "Không rõ nguồn" : "Unknown source");
+      $("pageSourceBtn").textContent = uiLanguage === "vi"
+        ? "Đọc bài gốc · " + sourceName
+        : "Read original · " + sourceName;
 
       document.body.classList.add("reading-mode");
       $("articlePage").classList.add("open");
