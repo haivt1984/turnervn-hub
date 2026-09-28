@@ -1048,6 +1048,8 @@ def discover_tech_blog_links(html, base_url, source_name):
             valid = "/blogs/construction/" in path and path != "/blogs/construction"
         elif source_name == "Microsoft SharePoint":
             valid = "/blog/spblog/" in path and "/all-posts" not in path
+        elif source_name == "Microsoft Power BI":
+            valid = "/en-us/blog/" in path and path.rstrip("/") != "/en-us/blog"
 
         if not valid:
             continue
@@ -2104,7 +2106,7 @@ class Default(WorkerEntrypoint):
                         result = await discover_tvpl_rss_batch(env, source)
                     elif source.get("name") == "Autodesk Construction":
                         result = await discover_autodesk_rss_batch(env, source)
-                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint"}:
+                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint", "Microsoft Power BI"}:
                         result = await discover_tech_blog_batch(env, source)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
@@ -2201,7 +2203,7 @@ class Default(WorkerEntrypoint):
                     await discover_tvpl_rss_batch(env, source)
                 elif source_name == "Autodesk Construction":
                     await discover_autodesk_rss_batch(env, source)
-                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint"}:
+                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Microsoft SharePoint", "Microsoft Power BI"}:
                     await discover_tech_blog_batch(env, source)
                 else:
                     source_id = await get_or_create_source(env, source)
