@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.4-20260928"
+BUILD_VERSION = "batch-v1.5-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -631,8 +631,10 @@ def extract_moc_published(html):
     if m:
         try:
             day, month, year, hour, minute = [int(x) for x in m.groups()]
-            local_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc) - timedelta(hours=7)
-            return local_dt.isoformat()
+            # Store the instant in UTC. MOC displays Vietnam time (UTC+7).
+            local_dt = datetime(year, month, day, hour, minute)
+            utc_dt = local_dt - timedelta(hours=7)
+            return utc_dt.replace(tzinfo=timezone.utc).isoformat()
         except Exception:
             pass
     return extract_published(html)
@@ -660,25 +662,37 @@ def extract_moc_main_text(html):
 
 
 def extract_moc_image(html, base_url):
-    # Prefer images inside the article content, excluding common UI assets.
-    content_html = find_first([
-        r'<div[^>]+id=["\']divArticleDescription[123]["\'][^>]*>([\s\S]*?)</div>',
-        r'<div[^>]+class=["\'][^"\']*Around_News_Content[^"\']*["\'][^>]*>([\s\S]*?)</div>',
-    ], html) or ""
+    blocks = []
+    for ident in ("divArticleDescription1", "divArticleDescription2", "divArticleDescription3"):
+        block = find_first([
+            rf'<div[^>]+id=["\']{ident}["\'][^>]*>([\s\S]*?)</div>',
+        ], html)
+        if block:
+            blocks.append(block)
 
+    content_html = " ".join(blocks)
     candidates = []
-    for m in re.finditer(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', content_html, flags=re.I):
-        candidates.append(urljoin(base_url, m.group(1)))
+
+    for m in re.finditer(
+        r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']',
+        content_html,
+        flags=re.I,
+    ):
+        candidates.append(urljoin(base_url, unescape(m.group(1))))
 
     for candidate in candidates:
-        low = urlparse(candidate).path.lower()
-        if any(x in low for x in ("logo", "keyword", "icon", "favicon", "loading", "sprite", "avatar")):
+        path = urlparse(candidate).path.lower()
+        if any(x in path for x in (
+            "logo", "keyword", "icon", "favicon", "loading",
+            "sprite", "avatar", "_layouts/images"
+        )):
             continue
-        if any(low.endswith(x) for x in (".svg", ".ico", ".gif")):
+        if any(path.endswith(x) for x in (".svg", ".ico", ".gif")):
             continue
         return candidate
 
-    return extract_image(html, base_url)
+    # No valid article image is better than storing a site UI icon.
+    return None
 
 
 def extract_main_text(html):
