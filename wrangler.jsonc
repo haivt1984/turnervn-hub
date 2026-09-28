@@ -1,9 +1,0 @@
-{
-  "name": "turnervn-news-collector",
-  "main": "collector.py",
-  "compatibility_date": "2026-09-28",
-  "compatibility_flags": ["python_workers"],
-  "triggers": {
-    "crons": ["0 * * * *"]
-  }
-}
