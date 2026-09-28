@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.0-20260928"
+BUILD_VERSION = "batch-v2.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,38 +623,35 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # The visible article timestamp is located immediately after
-    # the News_Detail_Title and before the article description.
-    # Extract a bounded article-header slice first; this avoids the
-    # site's current date shown in the global header.
-    title_pos = html.find("News_Detail_Title")
+    # Search near the article title. On MOC pages the article date is
+    # rendered after News_Detail_Title and before divArticleDescription.
+    title_match = re.search(
+        r'<h1[^>]+class=["\'][^"\']*News_Detail_Title[^"\']*["\'][^>]*>[\s\S]*?</h1>',
+        html,
+        flags=re.I,
+    )
+
+    start = title_match.end() if title_match else 0
     desc_positions = [
         p for p in (
-            html.find("divArticleDescription1"),
-            html.find("divArticleDescription2"),
-            html.find("divArticleDescription3"),
+            html.lower().find("divarticledescription1", start),
+            html.lower().find("divarticledescription2", start),
+            html.lower().find("divarticledescription3", start),
         ) if p >= 0
     ]
-    desc_pos = min(desc_positions) if desc_positions else -1
+    end = min(desc_positions) if desc_positions else min(len(html), start + 15000)
 
-    if title_pos >= 0:
-        end_pos = desc_pos if desc_pos > title_pos else min(len(html), title_pos + 12000)
-        header_html = html[title_pos:end_pos]
-    else:
-        header_html = html
+    context = clean_text(unescape(html[start:end]))
 
-    header_text = clean_text(unescape(header_html))
-
-    # MOC displays values such as: "Thứ tư, 23/09/2026 15:55".
     matches = re.findall(
         r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
         r'\s+(\d{1,2})\s*:\s*(\d{2})',
-        header_text,
+        context,
     )
 
     if matches:
+        day, month, year, hour, minute = [int(x) for x in matches[-1]]
         try:
-            day, month, year, hour, minute = [int(x) for x in matches[-1]]
             return datetime(
                 year, month, day, hour, minute,
                 tzinfo=timezone(timedelta(hours=7)),
@@ -662,6 +659,8 @@ def extract_moc_published(html):
         except Exception:
             pass
 
+    # Final MOC-specific fallback: look in the visible article header
+    # for a dated timestamp, but never use the site's global current date.
     return None
 
 
@@ -1591,8 +1590,8 @@ class Default(WorkerEntrypoint):
 
                 html = await response_text(resp)
                 title = extract_title(html)
-                published = extract_published(html)
-                image = extract_image(html, inspect_url)
+                published = extract_moc_published(html) if "moc.gov.vn" in inspect_url.lower() else extract_published(html)
+                image = extract_moc_image(html, inspect_url) if "moc.gov.vn" in inspect_url.lower() else extract_image(html, inspect_url)
 
                 interesting = []
                 for m in re.finditer(
