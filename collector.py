@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.2-20260928"
+BUILD_VERSION = "batch-v2.3-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,45 +623,38 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # Search near the article title. On MOC pages the article date is
-    # rendered after News_Detail_Title and before divArticleDescription.
-    title_match = re.search(
-        r'<h1[^>]+class=["\'][^"\']*News_Detail_Title[^"\']*["\'][^>]*>[\s\S]*?</h1>',
-        html,
+    # MOC renders the article date in the visible text immediately after
+    # the article title. Use text order rather than fragile DOM nesting.
+    title = clean_text(extract_title(html))
+    page_text = clean_text(unescape(html))
+
+    search_start = 0
+    if title:
+        title_pos = page_text.find(title)
+        if title_pos >= 0:
+            search_start = title_pos + len(title)
+
+    window = page_text[search_start:search_start + 5000]
+
+    match = re.search(
+        r'(?:Thứ[^,]*,\s*)?'
+        r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
+        r'\s+(\d{1,2})\s*:\s*(\d{2})',
+        window,
         flags=re.I,
     )
 
-    start = title_match.end() if title_match else 0
-    desc_positions = [
-        p for p in (
-            html.lower().find("divarticledescription1", start),
-            html.lower().find("divarticledescription2", start),
-            html.lower().find("divarticledescription3", start),
-        ) if p >= 0
-    ]
-    end = min(desc_positions) if desc_positions else min(len(html), start + 15000)
+    if not match:
+        return None
 
-    context = clean_text(unescape(html[start:end]))
-
-    matches = re.findall(
-        r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
-        r'\s+(\d{1,2})\s*:\s*(\d{2})',
-        context,
-    )
-
-    if matches:
-        day, month, year, hour, minute = [int(x) for x in matches[-1]]
-        try:
-            return datetime(
-                year, month, day, hour, minute,
-                tzinfo=timezone(timedelta(hours=7)),
-            ).isoformat()
-        except Exception:
-            pass
-
-    # Final MOC-specific fallback: look in the visible article header
-    # for a dated timestamp, but never use the site's global current date.
-    return None
+    try:
+        day, month, year, hour, minute = [int(x) for x in match.groups()]
+        return datetime(
+            year, month, day, hour, minute,
+            tzinfo=timezone(timedelta(hours=7)),
+        ).isoformat()
+    except Exception:
+        return None
 
 
 def extract_moc_main_text(html):
