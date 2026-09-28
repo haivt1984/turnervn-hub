@@ -340,6 +340,28 @@
       .footer-inner{flex-direction:column}
     }
   </style>
+
+<style>
+  .bilingual-label { display:inline-flex; gap:6px; align-items:center; }
+  .bilingual-label .en { color:#98a2b3; font-weight:600; }
+</style>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const nav = document.querySelectorAll("#mainNav button");
+    nav.forEach(btn => {
+      const pairs = {
+        latest: ["Mới nhất","Latest"],
+        construction: ["Xây dựng","Construction"],
+        technology: ["Công nghệ","Technology"],
+        m365: ["Microsoft 365","Microsoft 365"],
+        learning: ["Mẹo & Học hỏi","Tips & Learning"]
+      };
+      const p = pairs[btn.dataset.section];
+      if (p) btn.innerHTML = '<span class="bilingual-label"><span>'+p[0]+'</span><span class="en">/ '+p[1]+'</span></span>';
+    });
+  });
+</script>
+
 </head>
 
 <body>
