@@ -642,31 +642,54 @@ def extract_main_text(html):
 
 def discover_moc_article_links(html, base_url):
     """
-    Robust MOC-specific link discovery.
-    Accepts standard href spacing and resolves relative URLs.
-    Supports both modern /vn/tin-tuc/*.aspx and legacy
-    /vn/Pages/chitiettin.aspx?...&IDNews=... detail links.
+    Robust MOC-specific discovery. MOC may return article links as:
+      /vn/Pages/chitiettin.aspx?ChuyenmucID=1173&IDNews=...
+    or newer /vn/tin-tuc/.../*.aspx routes.
     """
     links = []
     seen = set()
-    href_pattern = r"""href\s*=\s*["']([^"']+)["']"""
 
-    for m in re.finditer(href_pattern, html, flags=re.I):
-        href = urljoin(base_url, m.group(1).strip())
+    # First, inspect all href attribute values.
+    href_values = re.findall(r"""href\s*=\s*["']([^"']+)["']""", html, flags=re.I)
+
+    # Also inspect raw HTML for escaped/embedded detail URLs.
+    raw_candidates = re.findall(
+        r"""(?:https?:)?//?(?:www\.)?moc\.gov\.vn)?[^"'<>\s]*chitiettin\.aspx[^"'<>\s]*""",
+        html,
+        flags=re.I,
+    )
+    href_values.extend(raw_candidates)
+
+    # And scan for direct /vn/tin-tuc/...aspx paths.
+    raw_news_paths = re.findall(
+        r"""[^"'<>\s]*?/vn/tin-tuc/[^"'<>\s]*?\.aspx(?:\?[^"'<>\s]*)?""",
+        html,
+        flags=re.I,
+    )
+    href_values.extend(raw_news_paths)
+
+    for value in href_values:
+        value = unescape(value).strip()
+        if not value:
+            continue
+
+        href = urljoin(base_url, value)
         if not href.startswith(("http://", "https://")):
             continue
 
         parsed = urlparse(href)
-        if parsed.netloc.lower() not in {"moc.gov.vn", "www.moc.gov.vn"}:
+        host = parsed.netloc.lower()
+        if host not in {"moc.gov.vn", "www.moc.gov.vn"}:
             continue
 
         path = parsed.path.lower()
-        query = parsed.query.lower()
+        query = unescape(parsed.query).lower()
 
         is_detail = (
-            ("/vn/pages/chitiettin.aspx" in path and "idnews=" in query)
+            (path.endswith("/chitiettin.aspx") and "idnews=" in query)
             or ("/vn/tin-tuc/" in path and path.endswith(".aspx"))
         )
+
         if not is_detail:
             continue
 
@@ -1039,6 +1062,8 @@ async def crawl_pagination_source(source):
 
     results = []
     seen = set()
+    pages_visited = 0
+    raw_links_seen = 0
     start_page = int(config.get("start_page", 1))
     max_pages = int(config.get("max_pages", 60))
     template = config.get("url_template", "")
@@ -1056,6 +1081,8 @@ async def crawl_pagination_source(source):
                 continue
 
             html = await response_text(resp)
+            pages_visited += 1
+            raw_links_seen += len(re.findall(r'chitiettin\\.aspx|/vn/tin-tuc/', html, flags=re.I))
             links = discover_moc_article_links(html, page_url)
 
             for url, label in links:
@@ -1080,6 +1107,8 @@ async def crawl_pagination_source(source):
             print("MOC pagination page error:", page_number, str(exc))
 
     source["_pagination_found"] = len(results)
+    source["_pagination_pages_visited"] = pages_visited
+    source["_pagination_raw_links_seen"] = raw_links_seen
     return results[:MAX_ARTICLES_PER_SOURCE]
 
 
@@ -1168,6 +1197,9 @@ async def crawl_one_source(env, source):
         "skipped": skipped_count,
         "images_stored": images_stored,
         "images_failed": images_failed,
+        "pagination_found": source.get("_pagination_found", 0),
+        "pagination_pages_visited": source.get("_pagination_pages_visited", 0),
+        "pagination_raw_links_seen": source.get("_pagination_raw_links_seen", 0),
         "error": error_message,
     }
 
