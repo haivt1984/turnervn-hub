@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v4.3-20260928"
+BUILD_VERSION = "batch-v4.4-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -96,22 +96,6 @@ SOURCES = [
         "content_type": "LEGAL",
         "active": True,
     },    {
-        "name": "Vietnam National Legal Database",
-        "page_url": "https://vbpl.vn/Pages/vanbanmoi.aspx",
-        "feed_url": "",
-        "pagination": {
-            "enabled": True,
-            "url_template": "https://vbpl.vn/Pages/vanbanmoi.aspx?page={page}",
-            "start_page": 1,
-            "max_pages": 10
-        },
-        "category": "Legal & Regulation",
-        "content_type": "LEGAL",
-        "active": True,
-        "pagination_state": True,
-    },
-
-    {
         "name": "Vietnam National Statistics Office",
         "page_url": "https://www.nso.gov.vn/",
         "feed_url": "",
@@ -1572,114 +1556,6 @@ async def crawl_multi_feed_source(source):
     return combined[:MAX_ARTICLES_PER_SOURCE]
 
 
-def discover_vbpl_article_links(html, base_url):
-    links = []
-    seen = set()
-
-    # VBPL pages may render document links as plain text, encoded markup,
-    # or HTML attributes. Scan the entire response for official detail URLs.
-    patterns = [
-        r'(?:https?:)?//vbpl\.vn/[^"\'<>\s]*?/Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
-        r'/[^"\'<>\s]*Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
-        r'Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
-    ]
-
-    raw_urls = []
-    for pattern in patterns:
-        raw_urls.extend(re.findall(pattern, html, flags=re.I))
-
-    for raw in raw_urls:
-        cleaned = unescape(raw).replace("\\/", "/").strip()
-        href = urljoin(base_url, cleaned)
-        if "vbpl.vn" not in href.lower() or "itemid=" not in href.lower():
-            continue
-
-        low = href.lower()
-        if not any(
-            x in low
-            for x in (
-                "vbpq-toanvan.aspx",
-                "vbpq-van-ban-goc.aspx",
-                "vbpq-van-bangoc.aspx",
-            )
-        ):
-            continue
-
-        canonical = canonicalize_url(href)
-        if canonical in seen:
-            continue
-
-        # Try to recover a nearby document title from the page.
-        idx = html.lower().find(cleaned.lower())
-        local = html[max(0, idx - 1200):min(len(html), idx + 1800)] if idx >= 0 else ""
-        title = ""
-        title_matches = re.findall(
-            r'<a[^>]*>([\s\S]{8,500})</a>',
-            local,
-            flags=re.I,
-        )
-        if title_matches:
-            title = clean_text(title_matches[-1])
-
-        seen.add(canonical)
-        links.append({
-            "url": canonical,
-            "title": title,
-            "published_at": None,
-        })
-
-        if len(links) >= MAX_ARTICLES_PER_SOURCE:
-            break
-
-    return links
-
-
-
-
-async def discover_vbpl_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PER_RUN):
-    source_id = await get_or_create_source(env, source)
-    config = source.get("pagination") or {}
-    template = config.get("url_template", "")
-    discovered = 0
-    queued = 0
-    queue_errors = []
-    page_stats = []
-
-    for page_number in range(start_page, start_page + pages):
-        page_url = template.format(page=page_number)
-        try:
-            resp = await http_get(page_url, "text/html,application/xhtml+xml")
-            if not resp.ok:
-                page_stats.append({"page": page_number, "status": resp.status, "links": 0})
-                continue
-
-            html = await response_text(resp)
-            links = discover_vbpl_article_links(html, page_url)
-            page_stats.append({"page": page_number, "status": resp.status, "links": len(links)})
-            discovered += len(links)
-
-            try:
-                queued += await queue_articles_bulk(env, source_id, links)
-            except Exception as exc:
-                queue_errors.append(str(exc))
-                print("VBPL queue failed:", str(exc))
-        except Exception as exc:
-            queue_errors.append(str(exc))
-            page_stats.append({"page": page_number, "status": "error", "links": 0})
-            print("VBPL page failed:", page_number, str(exc))
-
-    return {
-        "source": source["name"],
-        "start_page": start_page,
-        "pages": pages,
-        "discovered": discovered,
-        "queued": queued,
-        "already_queued": max(discovered - queued, 0),
-        "queue_errors": queue_errors,
-        "page_stats": page_stats,
-    }
-
-
 async def crawl_pagination_source(source):
     config = source.get("pagination") or {}
     if not config.get("enabled"):
@@ -2012,8 +1888,6 @@ class Default(WorkerEntrypoint):
                     pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
                     if source.get("name") == "Thu Vien Phap Luat":
                         result = await discover_tvpl_rss_batch(env, source)
-                    elif source.get("name") == "Vietnam National Legal Database":
-                        result = await discover_vbpl_batch(env, source, start_page, pages)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
                 else:
@@ -2088,43 +1962,12 @@ class Default(WorkerEntrypoint):
 
     async def scheduled(self, controller, env, ctx):
         # Scheduled safe batches:
-        # MOC = listing pagination, TVPL = RSS discovery-only,
-        # VBPL = official legal database pagination + full-text processing.
-        for source_name in (
-            "Ministry of Construction",
-            "Thu Vien Phap Luat",
-            "Vietnam National Legal Database",
-        ):
+        # MOC = paginated full-content collection.
+        # TVPL = RSS discovery-only because detail pages return HTTP 403.
+        for source_name in ("Ministry of Construction", "Thu Vien Phap Luat"):
             source = next((s for s in SOURCES if s.get("name") == source_name), None)
             if not source:
                 continue
-
-            try:
-                if source_name == "Thu Vien Phap Luat":
-                    await discover_tvpl_rss_batch(env, source)
-                else:
-                    source_id = await get_or_create_source(env, source)
-                    next_page = await get_source_pagination_page(env, source_id, 1)
-                    if source_name == "Vietnam National Legal Database":
-                        await discover_vbpl_batch(
-                            env, source, next_page, DISCOVERY_PAGES_PER_RUN
-                        )
-                    else:
-                        await discover_moc_batch(
-                            env, source, next_page, DISCOVERY_PAGES_PER_RUN
-                        )
-                    await set_source_pagination_page(
-                        env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
-                    )
-            except Exception as exc:
-                print("scheduled discovery failed:", source_name, str(exc))
-
-            if source_name != "Thu Vien Phap Luat":
-                try:
-                    await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
-                except Exception as exc:
-                    print("scheduled processing failed:", source_name, str(exc))
-
 
             try:
                 if source_name == "Thu Vien Phap Luat":
@@ -2141,27 +1984,8 @@ class Default(WorkerEntrypoint):
             except Exception as exc:
                 print("scheduled discovery failed:", source_name, str(exc))
 
-            try:
-                await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
-            except Exception as exc:
-                print("scheduled processing failed:", source_name, str(exc))
-
-
-            source_id = await get_or_create_source(env, source)
-            next_page = await get_source_pagination_page(env, source_id, 1)
-
-            try:
-                await discover_moc_batch(
-                    env, source, next_page, DISCOVERY_PAGES_PER_RUN
-                )
-                await set_source_pagination_page(
-                    env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
-                )
-            except Exception as exc:
-                print("scheduled discovery failed:", source_name, str(exc))
-
-            try:
-                await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
-            except Exception as exc:
-                print("scheduled processing failed:", source_name, str(exc))
-
+            if source_name != "Thu Vien Phap Luat":
+                try:
+                    await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
+                except Exception as exc:
+                    print("scheduled processing failed:", source_name, str(exc))
