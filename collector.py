@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.6-20260928"
+BUILD_VERSION = "batch-v1.7-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1243,6 +1243,7 @@ async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
     new_count = 0
     duplicates = 0
     images_stored = 0
+    item_errors = []
 
     for row in rows:
         qid = row["id"]
@@ -1266,9 +1267,18 @@ async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
             })
             done += 1
         except Exception as exc:
+            message = truncate(str(exc), 2000)
+            next_status = "failed" if attempts >= 3 else "queued"
             await update_queue_item(env, qid, {
-                "status": "failed" if attempts >= 3 else "queued",
-                "last_error": truncate(str(exc), 2000),
+                "status": next_status,
+                "last_error": message,
+            })
+            item_errors.append({
+                "queue_id": qid,
+                "url": row["url"],
+                "attempts": attempts,
+                "status": next_status,
+                "error": message,
             })
             failed += 1
 
@@ -1280,8 +1290,8 @@ async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
         "new": new_count,
         "duplicates": duplicates,
         "images_stored": images_stored,
+        "item_errors": item_errors,
     }
-
 
 # ============================================================
 # SOURCE CRAWLING
