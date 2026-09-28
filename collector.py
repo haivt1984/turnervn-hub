@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.4-20260928"
+BUILD_VERSION = "batch-v2.5-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,28 +623,42 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # MOC article pages expose the publication timestamp in visible text as
-    # DD/MM/YYYY HH:MM. The global site date has no time component, so this
-    # avoids confusing the header date with the article publication date.
-    page_text = clean_text(unescape(html))
-    matches = re.findall(
-        r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
-        r'\s+(\d{1,2})\s*:\s*(\d{2})',
-        page_text,
+    # MOC places the article timestamp after the article title. Some pages
+    # contain another description block before the title, so the search window
+    # must start strictly after the title element.
+    title_match = re.search(
+        r'<h1[^>]*class=["\'][^"\']*News_Detail_Title[^"\']*["\'][^>]*>[\s\S]*?</h1>',
+        html,
         flags=re.I,
     )
 
-    for values in reversed(matches):
-        day, month, year, hour, minute = [int(x) for x in values]
-        try:
-            return datetime(
-                year, month, day, hour, minute,
-                tzinfo=timezone(timedelta(hours=7)),
-            ).isoformat()
-        except Exception:
-            continue
+    if title_match:
+        window = html[title_match.end():title_match.end() + 8000]
+    else:
+        # Fallback to the explicit time marker.
+        marker = re.search(r'News_Time_Post', html, flags=re.I)
+        window = html[marker.start():marker.start() + 4000] if marker else ""
 
-    return None
+    text = clean_text(unescape(window))
+
+    # Article publication timestamp: DD/MM/YYYY HH:MM.
+    match = re.search(
+        r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
+        r'\s+(\d{1,2})\s*:\s*(\d{2})',
+        text,
+        flags=re.I,
+    )
+    if not match:
+        return None
+
+    try:
+        day, month, year, hour, minute = [int(x) for x in match.groups()]
+        return datetime(
+            year, month, day, hour, minute,
+            tzinfo=timezone(timedelta(hours=7)),
+        ).isoformat()
+    except Exception:
+        return None
 
 
 def extract_moc_main_text(html):
