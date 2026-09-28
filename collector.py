@@ -74,7 +74,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Legal & Regulation",
         "content_type": "LEGAL",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Vietnam National Statistics Office",
@@ -82,7 +82,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Vietnam Market",
         "content_type": "MARKET_INTELLIGENCE",
-        "active": True,
+        "active": False,
     },
 
     # ---- Construction / technology ----
@@ -92,7 +92,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Construction Dive",
@@ -100,7 +100,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Procore",
@@ -108,7 +108,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": True,
+        "active": False,
     },
     {
         "name": "OpenSpace",
@@ -116,7 +116,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": True,
+        "active": False,
     },
     {
         "name": "DroneDeploy",
@@ -124,7 +124,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": True,
+        "active": False,
     },
     {
         "name": "HoloBuilder / FARO",
@@ -132,7 +132,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Autodesk Construction",
@@ -140,7 +140,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
 
     # ---- Microsoft 365 ----
@@ -150,7 +150,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Microsoft Teams",
@@ -158,7 +158,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Microsoft Planner",
@@ -166,7 +166,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Microsoft Power BI",
@@ -174,7 +174,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
     {
         "name": "Microsoft Power Platform",
@@ -182,7 +182,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": True,
+        "active": False,
     },
 
     # ---- Turner ----
@@ -192,7 +192,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Turner Global",
         "content_type": "TURNER_INTERNAL",
-        "active": True,
+        "active": False,
     },
 ]
 
@@ -340,7 +340,7 @@ async def get_or_create_source(env, source):
     name = source["name"]
     url = source["page_url"]
     query = "?select=id,name,url,feed_url,category,active&url=eq." + url.replace(" ", "%20")
-    resp = await sb_request(env, "GET", "/rest/v1/sources" + query)
+    resp = await sb_request(env, "GET", "/rest/v1/hub_sources" + query)
     if resp.ok:
         data = json.loads(await resp.text())
         if data:
@@ -355,7 +355,7 @@ async def get_or_create_source(env, source):
         "active": bool(source.get("active", True)),
         "created_at": now_iso(),
     }
-    resp = await sb_request(env, "POST", "/rest/v1/sources", body, {"Prefer": "return=representation"})
+    resp = await sb_request(env, "POST", "/rest/v1/hub_sources", body, {"Prefer": "return=representation"})
     if not resp.ok:
         raise RuntimeError("Supabase source insert failed: " + await resp.text())
     data = json.loads(await resp.text())
@@ -363,7 +363,7 @@ async def get_or_create_source(env, source):
 
 
 async def article_exists(env, canonical_url, content_hash):
-    path = "/rest/v1/articles?select=id,canonical_url&or="
+    path = "/rest/v1/hub_articles?select=id,canonical_url&or="
     # PostgREST or syntax: (canonical_url.eq.X,content_hash.eq.Y)
     # URL-encode manually for safe basic use.
     encoded_url = canonical_url.replace(",", "%2C").replace(" ", "%20")
@@ -379,7 +379,7 @@ async def insert_article(env, article):
     resp = await sb_request(
         env,
         "POST",
-        "/rest/v1/articles",
+        "/rest/v1/hub_articles",
         article,
         {"Prefer": "return=representation,resolution=ignore-duplicates"},
     )
@@ -395,7 +395,7 @@ async def insert_image_record(env, image_record):
     resp = await sb_request(
         env,
         "POST",
-        "/rest/v1/article_images",
+        "/rest/v1/hub_article_images",
         image_record,
         {"Prefer": "return=minimal"},
     )
@@ -405,13 +405,13 @@ async def insert_image_record(env, image_record):
 
 async def insert_log(env, log_record):
     try:
-        await sb_request(env, "POST", "/rest/v1/crawl_logs", log_record, {"Prefer": "return=minimal"})
+        await sb_request(env, "POST", "/rest/v1/hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
     except Exception as exc:
         print("crawl log error:", str(exc))
 
 
 async def update_source_last_crawled(env, source_id):
-    path = "/rest/v1/sources?id=eq." + str(source_id)
+    path = "/rest/v1/hub_sources?id=eq." + str(source_id)
     try:
         await sb_request(
             env,
@@ -748,7 +748,7 @@ async def store_primary_image(env, article_id, article_url, image_url):
         ext = extension_from_content_type(content_type)
         safe_hash = sha256_text(image_url)[:16]
         path = f"{datetime.now(timezone.utc).strftime('%Y/%m/%d')}/article-{article_id}/{safe_hash}.{ext}"
-        public_url = await upload_storage(env, "article-images", path, content, content_type)
+        public_url = await upload_storage(env, "hub-article-images", path, content, content_type)
 
         await insert_image_record(env, {
             "article_id": article_id,
@@ -817,7 +817,7 @@ async def process_item(env, source, source_id, item):
             record["image_url"],
         )
         if stored_image_url:
-            patch_path = "/rest/v1/articles?id=eq." + str(article_id)
+            patch_path = "/rest/v1/hub_articles?id=eq." + str(article_id)
             try:
                 await sb_request(
                     env,
