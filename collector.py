@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.9-20260928"
+BUILD_VERSION = "batch-v3.0-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -86,6 +86,7 @@ SOURCES = [
         "category": "Vietnam & Regulation",
         "content_type": "NEWS",
         "active": True,
+        "pagination_state": True,
     },
     {
         "name": "Thu Vien Phap Luat",
@@ -429,6 +430,31 @@ async def insert_log(env, log_record):
         await sb_request(env, "POST", "/rest/v1/hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
     except Exception as exc:
         print("crawl log error:", str(exc))
+
+
+async def get_source_pagination_page(env, source_id, default_page=1):
+    path = "/rest/v1/hub_sources?select=pagination_page&id=eq." + str(source_id) + "&limit=1"
+    resp = await sb_request(env, "GET", path)
+    if not resp.ok:
+        return default_page
+    data = json.loads(await resp.text() or "[]")
+    if not data:
+        return default_page
+    try:
+        return max(1, int(data[0].get("pagination_page") or default_page))
+    except Exception:
+        return default_page
+
+
+async def set_source_pagination_page(env, source_id, page):
+    path = "/rest/v1/hub_sources?id=eq." + str(source_id)
+    await sb_request(
+        env,
+        "PATCH",
+        path,
+        {"pagination_page": int(page)},
+        {"Prefer": "return=minimal"},
+    )
 
 
 async def update_source_last_crawled(env, source_id):
@@ -1787,8 +1813,12 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Safe scheduled batch: discover a few MOC pages, then process a few queued articles.
+        # Safe scheduled MOC batches. Persist the next listing page so Cron
+        # advances through the site instead of rediscovering page 1 forever.
         moc = next((s for s in SOURCES if s.get("name") == "Ministry of Construction"), None)
         if moc:
-            await discover_moc_batch(env, moc, 1, DISCOVERY_PAGES_PER_RUN)
+            source_id = await get_or_create_source(env, moc)
+            next_page = await get_source_pagination_page(env, source_id, 1)
+            await discover_moc_batch(env, moc, next_page, DISCOVERY_PAGES_PER_RUN)
+            await set_source_pagination_page(env, source_id, next_page + DISCOVERY_PAGES_PER_RUN)
             await process_queue_batch(env, moc, PROCESS_BATCH_SIZE)
