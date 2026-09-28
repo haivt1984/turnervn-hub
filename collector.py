@@ -640,6 +640,40 @@ def extract_main_text(html):
     return truncate(text, MAX_CONTENT_CHARS)
 
 
+def discover_moc_article_links(html, base_url):
+    """
+    MOC-specific discovery that scans href attributes directly.
+    It does not depend on the exact HTML nesting/anchor markup.
+    """
+    links = []
+    seen = set()
+
+    for m in re.finditer(r'href\\s*=\\s*["\\']([^"\\']+\\.aspx(?:\\?[^"\\']*)?)["\\']', html, flags=re.I):
+        href = urljoin(base_url, m.group(1))
+        if not href.startswith(("http://", "https://")):
+            continue
+
+        href = canonicalize_url(href)
+        parsed = urlparse(href)
+
+        if parsed.netloc.lower() not in {"moc.gov.vn", "www.moc.gov.vn"}:
+            continue
+
+        path = parsed.path.lower()
+        if "/vn/tin-tuc/" not in path:
+            continue
+
+        if href in seen:
+            continue
+        seen.add(href)
+        links.append((href, ""))
+
+        if len(links) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+    return links
+
+
 def discover_html_links(html, base_url, source=None):
     links = []
     seen = set()
@@ -773,7 +807,10 @@ async def crawl_html_source(source):
         except Exception as exc:
             print("discovered RSS failed:", source["name"], discovered_feed, str(exc))
 
-    links = discover_html_links(html, discovery_url, source)
+    if source.get("name") == "Ministry of Construction":
+        links = discover_moc_article_links(html, discovery_url)
+    else:
+        links = discover_html_links(html, discovery_url, source)
 
     for url, label in links:
         try:
@@ -1012,7 +1049,10 @@ async def crawl_pagination_source(source):
                 continue
 
             html = await response_text(resp)
-            links = discover_html_links(html, page_url, source)
+            if source.get("name") == "Ministry of Construction":
+                links = discover_moc_article_links(html, page_url)
+            else:
+                links = discover_html_links(html, page_url, source)
 
             if not links:
                 consecutive_empty += 1
@@ -1047,6 +1087,8 @@ async def crawl_pagination_source(source):
         except Exception as exc:
             print("pagination error:", source["name"], page_number, str(exc))
 
+    source["_pagination_found"] = len(results)
+    source["_pagination_pages_visited"] = len(visited_pages)
     return results[:MAX_ARTICLES_PER_SOURCE]
 
 
