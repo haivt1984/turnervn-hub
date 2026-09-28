@@ -512,8 +512,8 @@
       2) Make sure your Supabase RLS policy allows SELECT for
          the public/anonymous frontend, if this site is public.
       3) The frontend expects:
-         - sources table
-         - articles table
+         - hub_sources table
+         - hub_articles table
       4) Recommended article fields:
          id, source_id, title, url, description, content,
          author, published_at, crawled_at, category,
@@ -524,7 +524,7 @@
       Only use the public anon key.
     */
 
-    const SUPABASE_URL = "YOUR_SUPABASE_URL";
+    const SUPABASE_URL = "https://lleeibzegmnycuingzgx.supabase.co";
     const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 
     let supabaseClient = null;
@@ -918,14 +918,14 @@
 
     async function loadFromSupabase() {
       if (!supabaseClient) {
-        $("syncStatus").textContent = "Demo mode · Configure Supabase";
+        $("syncStatus").textContent = "Supabase not configured";
         return;
       }
 
       $("syncStatus").textContent = "Syncing...";
       try {
         const { data, error } = await supabaseClient
-          .from("articles")
+          .from("hub_articles")
           .select(`
             id,
             source_id,
@@ -940,18 +940,18 @@
             image_url,
             ai_summary,
             relevance,
-            sources (
+            hub_sources (
               name
             )
           `)
-          .order("published_at", { ascending: false })
+          .order("published_at", { ascending: false, nullsFirst: false })
           .limit(500);
 
         if (error) throw error;
 
         allArticles = (data || []).map(item => ({
           ...item,
-          source_name: item.sources?.name || "Unknown source"
+          source_name: item.hub_sources?.name || "Unknown source"
         }));
 
         buildFilters();
@@ -959,13 +959,16 @@
         updateFeedTitle();
         renderFeed();
 
-        $("syncStatus").textContent = `Synced · ${formatDate(new Date().toISOString())}`;
-        $("lastRefresh").textContent = formatDate(new Date().toISOString());
+        $("syncStatus").textContent =
+          `Synced · ${formatDate(new Date().toISOString())}`;
+        $("lastRefresh").textContent =
+          formatDate(new Date().toISOString());
       } catch (err) {
         console.error("Supabase load error:", err);
-        $("syncStatus").textContent = "Sync error · showing demo data";
-        $("lastRefresh").textContent = formatDate(new Date().toISOString());
-        toast("Supabase could not be loaded. Showing demo data.");
+        $("syncStatus").textContent = "Sync error";
+        $("lastRefresh").textContent =
+          formatDate(new Date().toISOString());
+        toast("Supabase could not be loaded. Check RLS and the anon key.");
       }
     }
 
@@ -1051,10 +1054,12 @@
     });
 
     // Initial render
-    buildFilters();
-    updateStats();
-    updateFeedTitle();
-    renderFeed();
+    if (supabaseClient) {
+      buildFilters();
+      updateStats();
+      updateFeedTitle();
+      renderFeed();
+    }
     $("lastRefresh").textContent = formatDate(new Date().toISOString());
 
     // Connect to Supabase when configured
