@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.3-20260928"
+BUILD_VERSION = "batch-v5.4-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -156,7 +156,7 @@ SOURCES = [
     {
         "name": "Autodesk Construction",
         "page_url": "https://www.autodesk.com/blogs/construction/",
-        "feed_url": "",
+        "feed_url": "https://www.autodesk.com/blogs/construction/feed",
         "category": "Construction Technology",
         "content_type": "NEWS",
         "active": True,
@@ -1128,6 +1128,66 @@ async def discover_tech_blog_batch(env, source):
 
 
 
+async def discover_autodesk_rss_batch(env, source):
+    feed_url = source.get("feed_url")
+    if not feed_url:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": ["Autodesk RSS feed_url is not configured"],
+        }
+
+    resp = await http_get(
+        feed_url,
+        "application/rss+xml,application/atom+xml,text/xml,*/*",
+    )
+    if not resp.ok:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [f"RSS HTTP {resp.status}"],
+        }
+
+    xml_text = await response_text(resp)
+    items = parse_feed(xml_text, source["page_url"], source)
+
+    filtered = []
+    for item in items:
+        url = canonicalize_url(item.get("url", ""))
+        if "autodesk.com/blogs/construction/" not in url.lower():
+            continue
+        filtered.append({
+            "url": url,
+            "title": item.get("title"),
+            "published_at": item.get("published_at"),
+        })
+        if len(filtered) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+    source_id = await get_or_create_source(env, source)
+    try:
+        queued = await queue_articles_bulk(env, source_id, filtered)
+        return {
+            "source": source["name"],
+            "discovered": len(filtered),
+            "queued": queued,
+            "already_queued": max(len(filtered) - queued, 0),
+            "queue_errors": [],
+        }
+    except Exception as exc:
+        return {
+            "source": source["name"],
+            "discovered": len(filtered),
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [str(exc)],
+        }
+
+
 async def discover_tvpl_rss_batch(env, source):
     feed_url = source.get("feed_url")
     if not feed_url:
@@ -2040,7 +2100,9 @@ class Default(WorkerEntrypoint):
                     pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
                     if source.get("name") == "Thu Vien Phap Luat":
                         result = await discover_tvpl_rss_batch(env, source)
-                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy", "Autodesk Construction"}:
+                    elif source.get("name") == "Autodesk Construction":
+                        result = await discover_autodesk_rss_batch(env, source)
+                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy"}:
                         result = await discover_tech_blog_batch(env, source)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
@@ -2136,7 +2198,9 @@ class Default(WorkerEntrypoint):
             try:
                 if source_name == "Thu Vien Phap Luat":
                     await discover_tvpl_rss_batch(env, source)
-                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Autodesk Construction"}:
+                elif source_name == "Autodesk Construction":
+                    await discover_autodesk_rss_batch(env, source)
+                elif source_name in {"Procore", "OpenSpace", "DroneDeploy"}:
                     await discover_tech_blog_batch(env, source)
                 else:
                     source_id = await get_or_create_source(env, source)
