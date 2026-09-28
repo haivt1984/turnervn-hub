@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.5-20260928"
+BUILD_VERSION = "batch-v1.6-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,21 +623,42 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    raw = find_first([
-        r'<span[^>]+class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</span>',
-    ], html)
-    text = clean_text(raw)
-    m = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})', text)
-    if m:
-        try:
-            day, month, year, hour, minute = [int(x) for x in m.groups()]
-            # Store the instant in UTC. MOC displays Vietnam time (UTC+7).
-            local_dt = datetime(year, month, day, hour, minute)
-            utc_dt = local_dt - timedelta(hours=7)
-            return utc_dt.replace(tzinfo=timezone.utc).isoformat()
-        except Exception:
-            pass
-    return extract_published(html)
+    # Read the article's own timestamp, not the site's header date.
+    patterns = [
+        r'<span[^>]*class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</span>',
+        r'<[^>]+class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</[^>]+>',
+    ]
+
+    raw = None
+    for pattern in patterns:
+        m = re.search(pattern, html, flags=re.I)
+        if m:
+            raw = m.group(1)
+            break
+
+    if raw:
+        text = clean_text(unescape(raw))
+        m = re.search(
+            r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
+            r'(?:\s+(\d{1,2})\s*:\s*(\d{2}))?',
+            text
+        )
+        if m:
+            day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            hour = int(m.group(4) or 0)
+            minute = int(m.group(5) or 0)
+            try:
+                # MOC displays Vietnam local time (UTC+7).
+                return datetime(
+                    year, month, day, hour, minute,
+                    tzinfo=timezone(timedelta(hours=7))
+                ).isoformat()
+            except Exception:
+                pass
+
+    # Do NOT fall back to generic page dates because MOC pages contain
+    # a current site/header date that can be mistaken for publication date.
+    return None
 
 
 def extract_moc_main_text(html):
