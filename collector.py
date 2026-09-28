@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.4-20260928"
+BUILD_VERSION = "batch-v5.5-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -2189,7 +2189,6 @@ class Default(WorkerEntrypoint):
             "Procore",
             "OpenSpace",
             "DroneDeploy",
-            "Autodesk Construction",
         ):
             source = next((s for s in SOURCES if s.get("name") == source_name), None)
             if not source:
