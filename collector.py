@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v6.1-20260928"
+BUILD_VERSION = "batch-v6.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -189,7 +189,7 @@ SOURCES = [
     },
     {
         "name": "Microsoft Power BI",
-        "page_url": "https://powerbi.microsoft.com/blog/",
+        "page_url": "https://europe.powerbi.microsoft.com/en-us/blog/",
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
@@ -1033,7 +1033,13 @@ def discover_tech_blog_links(html, base_url, source_name):
             continue
 
         parsed = urlparse(href)
-        if parsed.netloc.lower().replace("www.", "") != host.replace("www.", ""):
+        parsed_host = parsed.netloc.lower().replace("www.", "")
+        base_host = host.replace("www.", "")
+        if source_name == "Microsoft Power BI":
+            allowed_hosts = {"powerbi.microsoft.com", "europe.powerbi.microsoft.com", "asia.powerbi.microsoft.com", "mea.powerbi.microsoft.com", "nam.powerbi.microsoft.com", "australia.powerbi.microsoft.com"}
+            if parsed_host not in allowed_hosts:
+                continue
+        elif parsed_host != base_host:
             continue
 
         path = parsed.path.lower().rstrip("/")
