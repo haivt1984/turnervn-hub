@@ -1387,8 +1387,9 @@ class Default(WorkerEntrypoint):
             else:
                 env = self.env
 
-            # Simple health endpoint.
-            if "action=run" not in url:
+            # Simple health endpoint. Any supported action is handled below.
+            # Unknown/no action returns health.
+            if not any(("action=" + a) in url for a in ("run", "discover", "process")):
                 payload = {
                     "service": "Turner Vietnam News Collector",
                     "version": BUILD_VERSION,
