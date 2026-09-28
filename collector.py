@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.9-20260928"
+BUILD_VERSION = "batch-v2.0-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1607,6 +1607,17 @@ class Default(WorkerEntrypoint):
                 body = find_first([r'<body[^>]*>([\s\S]*?)</body>'], html) or html
                 text_preview = clean_text(body)[:5000]
 
+                time_marker = "News_Time_Post"
+                time_pos = html.find(time_marker)
+                if time_pos >= 0:
+                    time_start = max(0, time_pos - 1000)
+                    time_end = min(len(html), time_pos + 3000)
+                    news_time_html = html[time_start:time_end]
+                    news_time_context = clean_text(unescape(news_time_html))
+                else:
+                    news_time_html = ""
+                    news_time_context = ""
+
                 return Response(
                     json.dumps({
                         "time": now_iso(),
@@ -1619,6 +1630,8 @@ class Default(WorkerEntrypoint):
                         "published": published,
                         "image": image,
                         "interesting_tags": interesting,
+                        "news_time_html": news_time_html,
+                        "news_time_context": news_time_context,
                         "text_preview": text_preview,
                     }, indent=2),
                     headers={"Content-Type": "application/json"},
