@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1-20260928"
+BUILD_VERSION = "batch-v1.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1038,16 +1038,20 @@ async def queue_articles_bulk(env, source_id, urls):
         "updated_at": now_iso(),
     } for url in clean_urls]
 
+    # PostgREST needs the conflict target explicitly for reliable bulk
+    # ignore-duplicates behavior with our unique URL index.
     resp = await sb_request(
         env,
         "POST",
-        "/rest/v1/hub_article_queue",
+        "/rest/v1/hub_article_queue?on_conflict=url",
         rows,
-        {"Prefer": "resolution=ignore-duplicates,return=minimal"},
+        {"Prefer": "resolution=ignore-duplicates,return=representation"},
     )
     if not resp.ok:
         raise RuntimeError("Bulk queue insert failed: " + await resp.text())
-    return len(rows)
+
+    inserted = json.loads(await resp.text() or "[]")
+    return len(inserted)
 
 
 async def queue_article(env, source_id, url):
@@ -1128,7 +1132,8 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
         "start_page": start_page,
         "pages": pages,
         "discovered": discovered,
-        "queued_attempts": queued,
+        "queued": queued,
+        "already_queued": max(discovered - queued, 0),
         "queue_errors": queue_errors,
         "page_stats": page_stats,
     }
