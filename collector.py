@@ -655,22 +655,8 @@ def discover_moc_article_links(html, base_url):
     # First, inspect all href attribute values.
     href_values = re.findall(r"""href\s*=\s*["']([^"']+)["']""", html, flags=re.I)
 
-    # Also inspect raw HTML for escaped/embedded detail URLs.
-    raw_candidates = re.findall(
-        r"""(?:https?:)?//?(?:www\.)?moc\.gov\.vn)?[^"'<>\s]*chitiettin\.aspx[^"'<>\s]*""",
-        html,
-        flags=re.I,
-    )
-    href_values.extend(raw_candidates)
-
-    # And scan for direct /vn/tin-tuc/...aspx paths.
-    raw_news_paths = re.findall(
-        r"""[^"'<>\s]*?/vn/tin-tuc/[^"'<>\s]*?\.aspx(?:\?[^"'<>\s]*)?""",
-        html,
-        flags=re.I,
-    )
-    href_values.extend(raw_news_paths)
-
+    # MOC article URLs are discovered from href attributes.
+    # Keep this parser deliberately simple to avoid regex portability issues.
     for value in href_values:
         value = unescape(value).strip()
         if not value:
