@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v3.3-20260928"
+BUILD_VERSION = "batch-v3.4-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1893,7 +1893,21 @@ class Default(WorkerEntrypoint):
                         result = await discover_moc_batch(env, source, start_page, pages)
                 else:
                     limit = min(int((q.get("limit") or [str(PROCESS_BATCH_SIZE)])[0]), PROCESS_BATCH_SIZE)
-                    result = await process_queue_batch(env, source, limit)
+                    if source.get("name") == "Thu Vien Phap Luat":
+                        result = {
+                            "source": source["name"],
+                            "selected": 0,
+                            "done": 0,
+                            "failed": 0,
+                            "new": 0,
+                            "duplicates": 0,
+                            "images_stored": 0,
+                            "item_errors": [],
+                            "mode": "discovery_only",
+                            "message": "TVPL detail pages return HTTP 403 to the Worker; full-text processing is disabled."
+                        }
+                    else:
+                        result = await process_queue_batch(env, source, limit)
 
                 return Response(
                     json.dumps({
