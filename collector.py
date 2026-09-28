@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v4.1-20260928"
+BUILD_VERSION = "batch-v4.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -97,11 +97,11 @@ SOURCES = [
         "active": True,
     },    {
         "name": "Vietnam National Legal Database",
-        "page_url": "https://vbpl.vn/TW/Pages/vanban.aspx?Page=1",
+        "page_url": "https://vbpl.vn/Pages/vanbanmoi.aspx",
         "feed_url": "",
         "pagination": {
             "enabled": True,
-            "url_template": "https://vbpl.vn/TW/Pages/vanban.aspx?Page={page}",
+            "url_template": "https://vbpl.vn/Pages/vanbanmoi.aspx?page={page}",
             "start_page": 1,
             "max_pages": 10
         },
@@ -1576,37 +1576,53 @@ def discover_vbpl_article_links(html, base_url):
     links = []
     seen = set()
 
-    href_values = re.findall(r'href\s*=\s*["\']([^"\']+)["\']', html, flags=re.I)
+    href_values = re.findall(
+        r'href\s*=\s*["\']([^"\']+)["\']',
+        html,
+        flags=re.I,
+    )
+
     for raw in href_values:
         href = urljoin(base_url, unescape(raw).strip())
-        if "vbpl.vn" not in href.lower():
-            continue
-
         low = href.lower()
-        # Official full-text and original-document pages.
-        if not (
-            "/pages/vbpq-toanvan.aspx" in low
-            or "/pages/vbpq-van-ban-goc.aspx" in low
-            or "/pages/vbpq-van-bangoc.aspx" in low
-        ):
+
+        if "vbpl.vn" not in low:
             continue
 
-        parsed = urlparse(href)
-        query = parse_qsl(parsed.query, keep_blank_values=True)
-        item_id = next((v for k, v in query if k.lower() == "itemid"), "")
-        if not item_id:
+        if "itemid=" not in low:
+            continue
+
+        if not any(
+            marker in low
+            for marker in (
+                "vbpq-toanvan.aspx",
+                "vbpq-van-ban-goc.aspx",
+                "vbpq-van-bangoc.aspx",
+            )
+        ):
             continue
 
         canonical = canonicalize_url(href)
         if canonical in seen:
             continue
-        seen.add(canonical)
 
-        # Keep discovery metadata light. The detail page remains the
-        # authoritative source for the title/content.
+        parsed = urlparse(canonical)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        if not any(k.lower() == "itemid" for k in query):
+            continue
+
+        # Get a nearby title from the listing if present.
+        idx = html.find(raw)
+        local = html[max(0, idx - 900):min(len(html), idx + 1600)] if idx >= 0 else ""
+        title = ""
+        tm = re.findall(r'<a[^>]*>([\s\S]{8,500})</a>', local, flags=re.I)
+        if tm:
+            title = clean_text(tm[-1])
+
+        seen.add(canonical)
         links.append({
             "url": canonical,
-            "title": "",
+            "title": title,
             "published_at": None,
         })
 
@@ -1614,6 +1630,8 @@ def discover_vbpl_article_links(html, base_url):
             break
 
     return links
+
+
 
 
 async def discover_vbpl_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PER_RUN):
