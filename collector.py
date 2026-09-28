@@ -1098,6 +1098,7 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
     template = config.get("url_template", "")
     discovered = 0
     queued = 0
+    queue_errors = []
     page_stats = []
 
     for page_number in range(start_page, start_page + pages):
@@ -1119,6 +1120,7 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
                 [url for url, _ in links],
             )
         except Exception as exc:
+            queue_errors.append(str(exc))
             print("bulk queue failed:", source["name"], str(exc))
 
     return {
@@ -1127,6 +1129,7 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
         "pages": pages,
         "discovered": discovered,
         "queued_attempts": queued,
+        "queue_errors": queue_errors,
         "page_stats": page_stats,
     }
 
