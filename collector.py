@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v4.0-20260928"
+BUILD_VERSION = "batch-v4.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -97,11 +97,11 @@ SOURCES = [
         "active": True,
     },    {
         "name": "Vietnam National Legal Database",
-        "page_url": "https://vbpl.vn/Pages/vanbanmoi.aspx",
+        "page_url": "https://vbpl.vn/TW/Pages/vanban.aspx?Page=1",
         "feed_url": "",
         "pagination": {
             "enabled": True,
-            "url_template": "https://vbpl.vn/Pages/vanbanmoi.aspx?page={page}",
+            "url_template": "https://vbpl.vn/TW/Pages/vanban.aspx?Page={page}",
             "start_page": 1,
             "max_pages": 10
         },
@@ -1576,53 +1576,38 @@ def discover_vbpl_article_links(html, base_url):
     links = []
     seen = set()
 
-    for match in re.finditer(
-        r'href=["\']([^"\']*(?:vbpq-toanvan|vbpq-vanbanlienquan|vbpq-thuoctinh)[^"\']*)["\']',
-        html,
-        flags=re.I,
-    ):
-        href = urljoin(base_url, unescape(match.group(1)).strip())
+    href_values = re.findall(r'href\s*=\s*["\']([^"\']+)["\']', html, flags=re.I)
+    for raw in href_values:
+        href = urljoin(base_url, unescape(raw).strip())
         if "vbpl.vn" not in href.lower():
             continue
 
-        # Only full-text/detail pages.
-        path = urlparse(href).path.lower()
-        if not path.endswith(".aspx"):
+        low = href.lower()
+        # Official full-text and original-document pages.
+        if not (
+            "/pages/vbpq-toanvan.aspx" in low
+            or "/pages/vbpq-van-ban-goc.aspx" in low
+            or "/pages/vbpq-van-bangoc.aspx" in low
+        ):
             continue
-        if "vbpq-toanvan" not in path:
+
+        parsed = urlparse(href)
+        query = parse_qsl(parsed.query, keep_blank_values=True)
+        item_id = next((v for k, v in query if k.lower() == "itemid"), "")
+        if not item_id:
             continue
 
         canonical = canonicalize_url(href)
         if canonical in seen:
             continue
-
-        local = html[max(0, match.start() - 700):min(len(html), match.end() + 1200)]
-        title = clean_text(match.group(0))
-        title_match = re.search(r'>([\s\S]{8,500})</a>', local, flags=re.I)
-        if title_match:
-            title = clean_text(title_match.group(1))
-
-        published_at = None
-        dm = re.findall(
-            r'Ban hành\s*:\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})',
-            clean_text(unescape(local)),
-            flags=re.I,
-        )
-        if dm:
-            day, month, year = [int(x) for x in dm[-1]]
-            try:
-                published_at = datetime(
-                    year, month, day,
-                    tzinfo=timezone(timedelta(hours=7)),
-                ).isoformat()
-            except Exception:
-                published_at = None
-
         seen.add(canonical)
+
+        # Keep discovery metadata light. The detail page remains the
+        # authoritative source for the title/content.
         links.append({
             "url": canonical,
-            "title": title,
-            "published_at": published_at,
+            "title": "",
+            "published_at": None,
         })
 
         if len(links) >= MAX_ARTICLES_PER_SOURCE:
