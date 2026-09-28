@@ -1214,7 +1214,7 @@
       buildFilters();
       updateFeedTitle();
       renderFeed();
-      if (selectedArticle) openArticle(selectedArticle.id, false);
+      if (selectedArticle) renderReader(selectedArticle);
     }
 
     function setLanguage(lang) {
@@ -1229,7 +1229,7 @@
       return article[fallbackKey] || "";
     }
 
-    function openArticle(id, pushState = true) {
+    function renderReader(article) {
       const article = allArticles.find(a => String(a.id) === String(id));
       if (!article) return;
       selectedArticle = article;
@@ -1272,6 +1272,22 @@
       $("articlePage").classList.add("open");
 
       applyUILanguage();
+
+      if (pushState) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("article", article.id);
+        history.pushState({articleId: article.id}, "", url);
+      }
+
+      document.body.classList.add("reading-mode");
+      $("articlePage").classList.add("open");
+    }
+
+    function openArticle(id, pushState = true) {
+      const article = allArticles.find(a => String(a.id) === String(id));
+      if (!article) return;
+      selectedArticle = article;
+      renderReader(article);
 
       if (pushState) {
         const url = new URL(window.location.href);
