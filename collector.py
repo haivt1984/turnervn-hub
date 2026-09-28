@@ -62,7 +62,7 @@ SOURCES = [
     # ---- Vietnam / official ----
     {
         "name": "Ministry of Construction",
-        "page_url": "https://moc.gov.vn/",
+        "page_url": "https://moc.gov.vn/vn/tin-tuc/",
         "feed_url": "",
         "category": "Vietnam & Regulation",
         "content_type": "NEWS",
@@ -397,7 +397,7 @@ async def insert_image_record(env, image_record):
     resp = await sb_request(
         env,
         "POST",
-        "/rest/v1/hub_hub_article_images",
+        "/rest/v1/hub_article_images",
         image_record,
         {"Prefer": "return=minimal"},
     )
@@ -407,7 +407,7 @@ async def insert_image_record(env, image_record):
 
 async def insert_log(env, log_record):
     try:
-        await sb_request(env, "POST", "/rest/v1/hub_hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
+        await sb_request(env, "POST", "/rest/v1/hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
     except Exception as exc:
         print("crawl log error:", str(exc))
 
@@ -575,12 +575,30 @@ def extract_author(html):
 
 
 def extract_image(html, base_url):
+    candidates = []
+
     value = html_meta(html, ["og:image", "twitter:image"])
     if value:
-        return urljoin(base_url, value)
-    m = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', html, flags=re.I)
-    if m:
-        return urljoin(base_url, m.group(1))
+        candidates.append(urljoin(base_url, value))
+
+    for m in re.finditer(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', html, flags=re.I):
+        candidates.append(urljoin(base_url, m.group(1)))
+        if len(candidates) >= 20:
+            break
+
+    bad_tokens = (
+        "logo", "icon", "favicon", "avatar", "placeholder",
+        "sprite", "loading", "captcha"
+    )
+
+    for candidate in candidates:
+        path = urlparse(candidate).path.lower()
+        if any(token in path for token in bad_tokens):
+            continue
+        if any(path.endswith(ext) for ext in (".svg", ".gif", ".ico")):
+            continue
+        return candidate
+
     return ""
 
 
@@ -605,29 +623,46 @@ def extract_main_text(html):
     return truncate(text, MAX_CONTENT_CHARS)
 
 
-def discover_html_links(html, base_url):
+def discover_html_links(html, base_url, source=None):
     links = []
     seen = set()
-    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>', html, flags=re.I):
+
+    if source and source.get("name") == "Ministry of Construction":
+        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']+/[0-9]+/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
+    else:
+        pattern = r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>'
+
+    for m in re.finditer(pattern, html, flags=re.I):
         href = urljoin(base_url, m.group(1))
         label = clean_text(m.group(2))
+
         if not href.startswith(("http://", "https://")):
             continue
+
         href = canonicalize_url(href)
+
         if href in seen:
             continue
         seen.add(href)
-        # Skip obvious non-article assets / utility pages.
+
         path = urlparse(href).path.lower()
         if any(path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".svg", ".pdf", ".zip")):
             continue
-        if any(x in href.lower() for x in ("/login", "/signup", "/privacy", "/terms", "/search", "/contact")):
+
+        if any(x in href.lower() for x in (
+            "/login", "/signup", "/privacy", "/terms", "/search",
+            "/contact", "/rss", "/sitemap", "/pages/"
+        )):
             continue
+
         if len(label) < 15:
             continue
+
         links.append((href, label))
+
         if len(links) >= MAX_ARTICLES_PER_SOURCE:
             break
+
     return links
 
 
@@ -655,7 +690,7 @@ async def crawl_html_source(source):
     if not resp.ok:
         raise RuntimeError(f"HTTP {resp.status}")
     html = await response_text(resp)
-    links = discover_html_links(html, source["page_url"])
+    links = discover_html_links(html, source["page_url"], source)
 
     for url, label in links:
         try:
@@ -843,6 +878,7 @@ async def crawl_one_source(env, source):
     found = 0
     new_count = 0
     duplicate_count = 0
+    skipped_count = 0
     status = "success"
     error_message = None
 
@@ -860,6 +896,8 @@ async def crawl_one_source(env, source):
                     new_count += 1
                 elif result["status"] == "duplicate":
                     duplicate_count += 1
+                elif result["status"] == "skip":
+                    skipped_count += 1
             except Exception as exc:
                 print("item processing error:", source["name"], str(exc))
 
@@ -886,6 +924,7 @@ async def crawl_one_source(env, source):
         "found": found,
         "new": new_count,
         "duplicates": duplicate_count,
+        "skipped": skipped_count,
         "error": error_message,
     }
 
@@ -904,6 +943,7 @@ async def run_collector(env):
                 "found": 0,
                 "new": 0,
                 "duplicates": 0,
+                "skipped": 0,
                 "error": str(exc),
             }
         results.append(result)
@@ -915,6 +955,7 @@ async def run_collector(env):
         "found": sum(r["found"] for r in results),
         "new": sum(r["new"] for r in results),
         "duplicates": sum(r["duplicates"] for r in results),
+        "skipped": sum(r.get("skipped", 0) for r in results),
     }
 
     print("COLLECTOR TOTALS:", json.dumps(totals))
