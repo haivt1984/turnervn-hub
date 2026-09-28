@@ -67,9 +67,9 @@ SOURCES = [
         "feed_url": "",
         "pagination": {
             "enabled": True,
-            "url_template": "https://moc.gov.vn/vn/Pages/chuyenmuctin.aspx?ChuyenmucID=1173&page={page}&tieude=tin-hoat-dong.aspx",
+            "url_template": "https://moc.gov.vn/vn/chuyen-muc/1173/tin-hoat-dong.aspx?page={page}",
             "start_page": 1,
-            "max_pages": 20
+            "max_pages": 50
         },
         "feed_urls": [
             "https://moc.gov.vn/rss/1176/tin-chi-dao--dieu-hanh.rss",
@@ -645,7 +645,7 @@ def discover_html_links(html, base_url, source=None):
     seen = set()
 
     if source and source.get("name") == "Ministry of Construction":
-        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']+/[0-9]+/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
+        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']*/[0-9]+/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
     else:
         pattern = r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>'
 
@@ -991,6 +991,8 @@ async def crawl_pagination_source(source):
     max_pages = int(config.get("max_pages", 20))
     template = config.get("url_template", "")
 
+    consecutive_empty = 0
+
     for page_number in range(start_page, start_page + max_pages):
         if len(results) >= MAX_ARTICLES_PER_SOURCE:
             break
@@ -1007,10 +1009,11 @@ async def crawl_pagination_source(source):
             links = discover_html_links(html, page_url, source)
 
             if not links:
-                # Stop when a page no longer contains article links.
-                if page_number > start_page:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
                     break
                 continue
+            consecutive_empty = 0
 
             page_new = 0
             for url, label in links:
