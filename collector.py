@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.1-20260928"
+BUILD_VERSION = "batch-v5.2-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -732,6 +732,41 @@ def extract_moc_image(html, base_url):
     return None
 
 
+def extract_dronedeploy_main_text(html):
+    # DroneDeploy pages often expose the article body in JSON-LD articleBody
+    # even when the visible HTML uses nested components that confuse the
+    # generic first-div parser.
+    json_body = find_first([
+        r'"articleBody"\s*:\s*"((?:\\.|[^"\\])*)"',
+    ], html)
+    if json_body:
+        try:
+            decoded = json.loads('"' + json_body + '"')
+            text = clean_text(decoded)
+            if len(text) >= 200:
+                return truncate(text, MAX_CONTENT_CHARS)
+        except Exception:
+            pass
+
+    # Prefer semantically named rich-text/article containers.
+    patterns = [
+        r'<article[^>]*>([\s\S]*?)</article>',
+        r'<div[^>]+(?:class|id)=["\'][^"\']*(?:blog-post|post-body|article-body|rich-text|richtext|post-content)[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+        r'<main[^>]*>([\s\S]*?)</main>',
+    ]
+    best = ""
+    for pattern in patterns:
+        for m in re.finditer(pattern, html, flags=re.I):
+            text = clean_text(m.group(1))
+            if len(text) > len(best):
+                best = text
+
+    if len(best) >= 200:
+        return truncate(best, MAX_CONTENT_CHARS)
+
+    return extract_main_text(html)
+
+
 def extract_main_text(html):
     # Prefer article/main containers; strip obvious navigation/footer blocks.
     candidate = ""
@@ -971,7 +1006,13 @@ async def fetch_html_candidate(url, source):
         "author": extract_author(html),
         "published_at": extract_moc_published(html) if is_moc else extract_published(html),
         "image_url": extract_moc_image(html, fetch_url) if is_moc else extract_image(html, fetch_url),
-        "content": extract_moc_main_text(html) if is_moc else extract_main_text(html),
+        "content": (
+            extract_moc_main_text(html)
+            if is_moc
+            else extract_dronedeploy_main_text(html)
+            if source.get("name") == "DroneDeploy"
+            else extract_main_text(html)
+        ),
         "category": source.get("category", "General"),
         "content_type": source.get("content_type", "NEWS"),
     }
