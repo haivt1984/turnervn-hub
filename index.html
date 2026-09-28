@@ -439,6 +439,32 @@
       border-color:#a8c4f1;
       transform:translateY(-1px);
     }
+    .article-link{
+      color:inherit;
+      text-decoration:none;
+    }
+    .article-link:focus-visible,
+    .read-more:focus-visible{
+      outline:3px solid #b8d4ff;
+      outline-offset:3px;
+    }
+    .feed-loading{
+      padding:54px 20px;
+      text-align:center;
+      color:#667085;
+      font-size:13px;
+    }
+    .loading-dot{
+      display:inline-block;
+      width:7px;height:7px;border-radius:50%;
+      background:#1769e0;
+      margin-right:7px;
+      animation:hubPulse 1s infinite ease-in-out;
+    }
+    @keyframes hubPulse{
+      0%,100%{transform:scale(.65);opacity:.45}
+      50%{transform:scale(1);opacity:1}
+    }
     .read-more svg{width:14px;height:14px}
 
     .date{font-weight:650}
@@ -997,14 +1023,13 @@
         const group = formatDayGroup(articleDate(article));
         if (group !== currentDay) {
           currentDay = group;
-          html += `
-            <div class="day-group">${escapeHtml(group)}</div>
-          `;
+          html += `<div class="day-group">${escapeHtml(group)}</div>`;
         }
 
         const detailLabel = uiLanguage === "vi" ? "Xem chi tiết" : "Read article";
         const sourceLabel = uiLanguage === "vi" ? "Nguồn" : "Source";
         const defaultCategory = uiLanguage === "vi" ? "Chung" : "General";
+        const articleUrl = "?article=" + encodeURIComponent(String(article.id));
 
         html += `
           <article class="article clickable" data-article-id="${escapeHtml(article.id)}" tabindex="0" role="link" aria-label="${escapeHtml(article.title)}">
@@ -1020,9 +1045,9 @@
               </div>
 
               <h3>
-                <button class="article-open" type="button" data-id="${escapeHtml(article.id)}">
+                <a class="article-link article-open" href="${articleUrl}" data-id="${escapeHtml(article.id)}">
                   ${escapeHtml(article.title)}
-                </button>
+                </a>
               </h3>
 
               <p class="excerpt">${escapeHtml(article.description || article.ai_summary || "")}</p>
@@ -1032,13 +1057,13 @@
                 ${article.author ? `<span class="source-badge">${escapeHtml(article.author)}</span>` : ""}
               </div>
 
-              <button class="read-more article-open-cta" type="button" data-id="${escapeHtml(article.id)}">
+              <a class="read-more article-open-cta" href="${articleUrl}" data-id="${escapeHtml(article.id)}">
                 ${detailLabel}
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M5 12h14"></path>
                   <path d="m13 6 6 6-6 6"></path>
                 </svg>
-              </button>
+              </a>
             </div>
           </article>
         `;
@@ -1290,6 +1315,9 @@ function closeArticlePage(pushState = true) {
       }
 
       $("syncStatus").textContent = uiLanguage === "vi" ? "Đang đồng bộ..." : "Syncing...";
+      $("feed").innerHTML = '<div class="feed-loading"><span class="loading-dot"></span>' +
+        (uiLanguage === "vi" ? "Đang tải tin tức..." : "Loading news...") +
+        '</div>';
       try {
         const { data: articleRows, error: articleError } = await supabaseClient
           .from("hub_articles")
@@ -1322,7 +1350,9 @@ function closeArticlePage(pushState = true) {
         renderFeed();
 
         const directArticleId = new URL(window.location.href).searchParams.get("article");
-        if (directArticleId) openArticle(directArticleId, false);
+        if (directArticleId) {
+          setTimeout(() => openArticle(directArticleId, false), 0);
+        }
 
         const stamp = new Date().toISOString();
         $("syncStatus").textContent = (uiLanguage === "vi" ? "Đã đồng bộ · " : "Synced · ") + formatDate(stamp);
@@ -1347,11 +1377,19 @@ function closeArticlePage(pushState = true) {
     // Event bindings
     // ----------------------------------------------------------
     $("feed").addEventListener("click", e => {
-      const openButton = e.target.closest(".article-open");
+      const openLink = e.target.closest(".article-open, .article-open-cta");
+      if (openLink) {
+        const id = openLink.dataset.id;
+        if (!id) return;
+        e.preventDefault();
+        openArticle(id);
+        return;
+      }
+
       const row = e.target.closest(".article[data-article-id]");
-      const id = openButton?.dataset.id || row?.dataset.articleId;
-      if (!id) return;
-      openArticle(id);
+      if (row) {
+        openArticle(row.dataset.articleId);
+      }
     });
 
     $("feed").addEventListener("keydown", e => {
