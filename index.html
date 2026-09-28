@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -111,6 +111,9 @@
     .header-actions{
       display:flex;align-items:center;gap:8px;margin-left:auto
     }
+    .lang-switch{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+    .lang-switch button{border:0;background:#fff;color:#667085;padding:9px 10px;font-size:11px;font-weight:800}
+    .lang-switch button.active{background:#0b1220;color:#fff}
     .icon-btn{
       width:40px;height:40px;border-radius:10px;
       border:1px solid var(--line);background:var(--surface);
@@ -417,7 +420,11 @@
       </nav>
 
       <div class="header-actions">
-        <button class="icon-btn" id="refreshBtn" title="Refresh">↻</button>
+        <div class="lang-switch" aria-label="Language">
+          <button id="langVi" class="active" type="button">VI</button>
+          <button id="langEn" type="button">EN</button>
+        </div>
+        <button class="icon-btn" id="refreshBtn" title="Làm mới">↻</button>
         <button class="icon-btn" id="themeBtn" title="Theme">☼</button>
         <div class="avatar" title="User">TV</div>
       </div>
@@ -431,10 +438,10 @@
       <p data-i18n="heroText">Tin tức xây dựng, công nghệ, pháp lý và Microsoft 365 được tự động thu thập, lưu trữ và sắp xếp theo nguồn và thời gian.</p>
 
       <div class="hero-grid">
-        <div class="hero-stat"><div class="num" id="statArticles">0</div><div class="lbl">Articles</div></div>
-        <div class="hero-stat"><div class="num" id="statSources">0</div><div class="lbl">Sources</div></div>
-        <div class="hero-stat"><div class="num" id="statToday">0</div><div class="lbl">Published today</div></div>
-        <div class="hero-stat"><div class="num" id="statHigh">0</div><div class="lbl">High relevance</div></div>
+        <div class="hero-stat"><div class="num" id="statArticles">0</div><div class="lbl" data-i18n="statArticles">Bài viết</div></div>
+        <div class="hero-stat"><div class="num" id="statSources">0</div><div class="lbl" data-i18n="statSources">Nguồn</div></div>
+        <div class="hero-stat"><div class="num" id="statToday">0</div><div class="lbl" data-i18n="statToday">Hôm nay</div></div>
+        <div class="hero-stat"><div class="num" id="statHigh">0</div><div class="lbl" data-i18n="statHigh">Ưu tiên cao</div></div>
       </div>
     </section>
 
@@ -460,8 +467,8 @@
       <section class="section-card">
         <div class="section-head">
           <div>
-            <h2 id="feedTitle">Latest Intelligence</h2>
-            <span id="feedSub">Newest information first</span>
+            <h2 id="feedTitle">Tin mới nhất</h2>
+            <span id="feedSub">Thông tin mới nhất được hiển thị trước</span>
           </div>
           <span id="resultCount">0 items</span>
         </div>
@@ -471,7 +478,7 @@
       <aside class="sidebar">
         <section class="section-card">
           <div class="section-head">
-            <div><h2>Top Sources</h2><span>Configured in Supabase</span></div>
+            <div><h2 data-i18n="topSources">Nguồn tin</h2><span data-i18n="supabaseSources">Dữ liệu từ Supabase</span></div>
           </div>
           <div class="side-body">
             <div class="source-list" id="sourceList"></div>
@@ -480,7 +487,7 @@
 
         <section class="section-card">
           <div class="section-head">
-            <div><h2>Topics</h2><span>Quick filters</span></div>
+            <div><h2 data-i18n="topics">Chủ đề</h2><span data-i18n="quickFilters">Bộ lọc nhanh</span></div>
           </div>
           <div class="side-body">
             <div class="category-list" id="categoryList"></div>
@@ -696,7 +703,7 @@
       }
     ];
 
-    let allArticles = [...demoArticles];
+    let allArticles = [];
     let activeCategory = "all";
     let activeSource = "all";
     let searchTerm = "";
@@ -714,9 +721,14 @@
         .replaceAll("'", "&#039;");
     }
 
+    function articleDate(article) {
+      return article?.published_at || article?.crawled_at || article?.created_at || null;
+    }
+
     function formatDate(dateString) {
+      if (!dateString) return uiLanguage === "vi" ? "Chưa có ngày" : "No date";
       const d = new Date(dateString);
-      if (Number.isNaN(d.getTime())) return "Unknown date";
+      if (Number.isNaN(d.getTime())) return uiLanguage === "vi" ? "Chưa có ngày" : "No date";
       return new Intl.DateTimeFormat("en-GB", {
         day: "2-digit",
         month: "short",
@@ -727,7 +739,9 @@
     }
 
     function formatDayGroup(dateString) {
+      if (!dateString) return uiLanguage === "vi" ? "CHƯA CÓ NGÀY" : "NO DATE";
       const d = new Date(dateString);
+      if (Number.isNaN(d.getTime())) return uiLanguage === "vi" ? "CHƯA CÓ NGÀY" : "NO DATE";
       const today = new Date();
       const y = new Date();
       y.setDate(today.getDate() - 1);
@@ -737,8 +751,8 @@
         a.getMonth() === b.getMonth() &&
         a.getDate() === b.getDate();
 
-      if (same(d,today)) return "TODAY";
-      if (same(d,y)) return "YESTERDAY";
+      if (same(d,today)) return uiLanguage === "vi" ? "HÔM NAY" : "TODAY";
+      if (same(d,y)) return uiLanguage === "vi" ? "HÔM QUA" : "YESTERDAY";
 
       return d.toLocaleDateString("en-GB", {
         day:"2-digit", month:"short", year:"numeric"
@@ -773,16 +787,16 @@
           ].filter(Boolean).join(" ").toLowerCase();
           return hay.includes(searchTerm.toLowerCase());
         })
-        .sort((a,b) => new Date(b.published_at) - new Date(a.published_at));
+        .sort((a,b) => new Date(articleDate(b) || 0) - new Date(articleDate(a) || 0));
     }
 
     function renderFeed() {
       const feed = $("feed");
       const items = filteredArticles();
-      $("resultCount").textContent = `${items.length} item${items.length === 1 ? "" : "s"}`;
+      $("resultCount").textContent = uiLanguage === "vi" ? `${items.length} bài` : `${items.length} item${items.length === 1 ? "" : "s"}`;
 
       if (!items.length) {
-        feed.innerHTML = `<div class="empty">No articles match the current filters.</div>`;
+        feed.innerHTML = `<div class="empty">${uiLanguage === "vi" ? "Không có bài viết phù hợp với bộ lọc." : "No articles match the current filters."}</div>`;
         return;
       }
 
@@ -790,7 +804,7 @@
       let currentDay = null;
 
       items.forEach(article => {
-        const group = formatDayGroup(article.published_at);
+        const group = formatDayGroup(articleDate(article));
         if (group !== currentDay) {
           currentDay = group;
           html += `
@@ -810,7 +824,7 @@
                   <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || "General")}</span>
                   ${article.relevance === "high" ? `<span class="chip red">TURNER RELEVANT</span>` : ""}
                 </div>
-                <div class="date">${escapeHtml(formatDate(article.published_at))}</div>
+                <div class="date">${escapeHtml(formatDate(articleDate(article))}</div>
               </div>
 
               <h3>
@@ -856,15 +870,15 @@
       const categoryFilter = $("categoryFilter");
       const sourceFilter = $("sourceFilter");
 
-      categoryFilter.innerHTML = `<option value="all">All categories</option>` +
+      categoryFilter.innerHTML = `<option value="all">${uiLanguage === "vi" ? "Tất cả danh mục" : "All categories"}</option>` +
         categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
 
-      sourceFilter.innerHTML = `<option value="all">All sources</option>` +
+      sourceFilter.innerHTML = `<option value="all">${uiLanguage === "vi" ? "Tất cả nguồn" : "All sources"}</option>` +
         sources.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
 
       $("categoryList").innerHTML = `
         <button class="category-row active" data-category="all">
-          <span class="cat-left"><span class="cat-icon">▦</span>All topics</span>
+          <span class="cat-left"><span class="cat-icon">▦</span>${uiLanguage === "vi" ? "Tất cả chủ đề" : "All topics"}</span>
           <span>${allArticles.length}</span>
         </button>
       ` + categories.map(c => {
@@ -896,7 +910,7 @@
         return `
           <div class="source-row">
             <span class="source-name">${escapeHtml(s)}</span>
-            <span class="source-count">${count} article${count === 1 ? "" : "s"}</span>
+            <span class="source-count">${count} ${uiLanguage === "vi" ? "bài" : `article${count === 1 ? "" : "s"}`}</span>
           </div>
         `;
       }).join("");
@@ -920,16 +934,74 @@
     }
 
     function updateFeedTitle() {
-      const map = {
-        all: ["Latest Intelligence","Newest information first"],
-        "Regulation": ["Regulation & Compliance","Official and industry updates"],
-        "Construction Technology": ["Construction Technology","Tools, workflows and digital construction"],
-        "Microsoft 365": ["Microsoft 365","SharePoint, Teams, Outlook, Planner and Power Platform"],
-        "Learning": ["Tips & Learning","Practical knowledge for Turner teams"]
+      const vi = {
+        all:["Tin mới nhất","Thông tin mới nhất được hiển thị trước"],
+        "Regulation":["Pháp lý & Tuân thủ","Cập nhật chính thức và ngành"],
+        "Construction Technology":["Công nghệ xây dựng","Công cụ, quy trình và xây dựng số"],
+        "Microsoft 365":["Microsoft 365","SharePoint, Teams, Outlook, Planner và Power Platform"],
+        "Learning":["Mẹo & Học hỏi","Kiến thức thực tế cho đội ngũ Turner"]
       };
-      const item = map[activeCategory] || [activeCategory, "Filtered intelligence"];
+      const en = {
+        all:["Latest Intelligence","Newest information first"],
+        "Regulation":["Regulation & Compliance","Official and industry updates"],
+        "Construction Technology":["Construction Technology","Tools, workflows and digital construction"],
+        "Microsoft 365":["Microsoft 365","SharePoint, Teams, Outlook, Planner and Power Platform"],
+        "Learning":["Tips & Learning","Practical knowledge for Turner teams"]
+      };
+      const map = uiLanguage === "vi" ? vi : en;
+      const item = map[activeCategory] || [activeCategory, uiLanguage === "vi" ? "Thông tin đã lọc" : "Filtered intelligence"];
       $("feedTitle").textContent = item[0];
       $("feedSub").textContent = item[1];
+    }
+
+    let uiLanguage = localStorage.getItem("turnervn-language") || "vi";
+
+    const I18N = {
+      vi: {
+        heroTitle:"Tin tức & kiến thức dành cho Turner Việt Nam",
+        heroText:"Tin tức xây dựng, công nghệ, pháp lý và Microsoft 365 được tự động thu thập, lưu trữ và sắp xếp theo nguồn và thời gian.",
+        searchPlaceholder:"Tìm tin tức, chủ đề, nguồn, từ khóa...",
+        navLatest:"Mới nhất", navConstruction:"Xây dựng", navTechnology:"Công nghệ",
+        navM365:"Microsoft 365", navLearning:"Mẹo & Học hỏi",
+        statArticles:"Bài viết", statSources:"Nguồn", statToday:"Hôm nay", statHigh:"Ưu tiên cao",
+        topSources:"Nguồn tin", supabaseSources:"Dữ liệu từ Supabase", topics:"Chủ đề", quickFilters:"Bộ lọc nhanh",
+        summary:"Tóm tắt", original:"Đọc nguồn gốc", back:"← Quay lại tin tức"
+      },
+      en: {
+        heroTitle:"News & knowledge for Turner Vietnam",
+        heroText:"Construction, technology, legal and Microsoft 365 intelligence automatically collected and organized by source and time.",
+        searchPlaceholder:"Search news, topics, sources and keywords...",
+        navLatest:"Latest", navConstruction:"Construction", navTechnology:"Technology",
+        navM365:"Microsoft 365", navLearning:"Tips & Learning",
+        statArticles:"Articles", statSources:"Sources", statToday:"Today", statHigh:"High relevance",
+        topSources:"Top Sources", supabaseSources:"Data from Supabase", topics:"Topics", quickFilters:"Quick filters",
+        summary:"Summary", original:"Original source", back:"← Back to News"
+      }
+    };
+
+    function applyUILanguage() {
+      const dict = I18N[uiLanguage] || I18N.vi;
+      document.documentElement.lang = uiLanguage;
+      document.querySelectorAll("[data-i18n]").forEach(el => {
+        const key = el.dataset.i18n;
+        if (dict[key]) el.textContent = dict[key];
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
+        const key = el.dataset.i18nPlaceholder;
+        if (dict[key]) el.placeholder = dict[key];
+      });
+      $("langVi")?.classList.toggle("active", uiLanguage === "vi");
+      $("langEn")?.classList.toggle("active", uiLanguage === "en");
+      buildFilters();
+      updateFeedTitle();
+      renderFeed();
+      if (selectedArticle) openArticle(selectedArticle.id, false);
+    }
+
+    function setLanguage(lang) {
+      uiLanguage = lang === "en" ? "en" : "vi";
+      localStorage.setItem("turnervn-language", uiLanguage);
+      applyUILanguage();
     }
 
     function localizedArticleField(article, viKey, enKey, fallbackKey) {
@@ -962,7 +1034,7 @@
       $("pageMeta").innerHTML = `
         <span class="source">${uiLanguage === "vi" ? "Nguồn" : "Source"}: ${escapeHtml(article.source_name || "Unknown source")}</span>
         <span>·</span>
-        <span>${escapeHtml(formatDate(article.published_at))}</span>
+        <span>${escapeHtml(formatDate(articleDate(article)))}</span>
         ${article.author ? `<span>·</span><span>${escapeHtml(article.author)}</span>` : ""}
         <span>·</span>
         ${relevanceHtml(article.relevance)}
@@ -1040,7 +1112,7 @@ function closeArticlePage(pushState = true) {
               name
             )
           `)
-          .order("published_at", { ascending: false, nullsFirst: false })
+          .order("crawled_at", { ascending: false, nullsFirst: false })
           .limit(500);
 
         if (error) throw error;
@@ -1130,6 +1202,8 @@ function closeArticlePage(pushState = true) {
     });
 
     $("refreshBtn").addEventListener("click", refreshData);
+    $("langVi").addEventListener("click", () => setLanguage("vi"));
+    $("langEn").addEventListener("click", () => setLanguage("en"));
 
     $("themeBtn").addEventListener("click", () => {
       // Placeholder for future dark/light theme implementation.
@@ -1174,6 +1248,9 @@ function closeArticlePage(pushState = true) {
       renderFeed();
     }
     $("lastRefresh").textContent = formatDate(new Date().toISOString());
+
+    // Vietnamese is the default UI language; users can switch to English.
+    applyUILanguage();
 
     // Connect to Supabase when configured
     loadFromSupabase();
