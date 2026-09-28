@@ -49,6 +49,7 @@ MAX_ARTICLES_PER_SOURCE = 100
 MAX_CONTENT_CHARS = 120000
 MAX_DESCRIPTION_CHARS = 1000
 MAX_TITLE_CHARS = 500
+MIN_CONTENT_CHARS = 800
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DISCOVERY_PAGES_PER_RUN = 1
 PROCESS_BATCH_SIZE = 3
@@ -56,7 +57,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v6.2-20260928"
+BUILD_VERSION = "batch-v7.0-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -767,25 +768,72 @@ def extract_dronedeploy_main_text(html):
     return extract_main_text(html)
 
 
+def extract_jsonld_article_body(html):
+    bodies = []
+    for match in re.finditer(
+        r'<script[^>]+type=["\']application/ld\\+json["\'][^>]*>([\\s\\S]*?)</script>',
+        html,
+        flags=re.I,
+    ):
+        try:
+            data = json.loads(match.group(1).strip())
+        except Exception:
+            continue
+        nodes = data if isinstance(data, list) else [data]
+        pending = list(nodes)
+        while pending:
+            node = pending.pop(0)
+            if not isinstance(node, dict):
+                continue
+            graph = node.get("@graph")
+            if isinstance(graph, list):
+                pending.extend(graph)
+            body = node.get("articleBody")
+            if isinstance(body, str):
+                text = clean_text(body)
+                if len(text) >= MIN_CONTENT_CHARS:
+                    bodies.append(text)
+    return max(bodies, key=len) if bodies else ""
+
+
+def content_quality(content):
+    text = clean_text(content)
+    if len(text) < MIN_CONTENT_CHARS:
+        return False, len(text)
+    words = re.findall(r"\\b[A-Za-zÀ-ỹĐđ0-9]{3,}\\b", text)
+    if len(words) < 120:
+        return False, len(text)
+    return True, len(text)
+
+
 def extract_main_text(html):
-    # Prefer article/main containers; strip obvious navigation/footer blocks.
-    candidate = ""
+    jsonld = extract_jsonld_article_body(html)
+    if jsonld:
+        return truncate(jsonld, MAX_CONTENT_CHARS)
+
+    candidates = []
     patterns = [
-        r"<article[^>]*>([\s\S]*?)</article>",
-        r"<main[^>]*>([\s\S]*?)</main>",
-        r'<div[^>]+(?:class|id)=["\'][^"\']*(?:article|post|content|entry)[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+        r"<article\\b[^>]*>([\\s\\S]*?)</article>",
+        r"<main\\b[^>]*>([\\s\\S]*?)</main>",
+        r'<div\\b[^>]*(?:id|class)=["\'][^"\']*(?:article-body|article-content|article_content|post-content|post-body|entry-content|blog-post|rich-text|richtext|content-body|news-content)[^"\']*["\'][^>]*>([\\s\\S]*?)</div>',
+        r'<section\\b[^>]*(?:id|class)=["\'][^"\']*(?:article|post|content|entry)[^"\']*["\'][^>]*>([\\s\\S]*?)</section>',
     ]
     for pattern in patterns:
-        m = re.search(pattern, html, flags=re.I)
-        if m:
-            candidate = m.group(1)
-            break
-    if not candidate:
-        candidate = html
+        for match in re.finditer(pattern, html, flags=re.I):
+            text = clean_text(match.group(1))
+            if len(text) < MIN_CONTENT_CHARS:
+                continue
+            lower = text.lower()
+            penalty = sum(100 for token in ("cookie", "privacy policy", "subscribe", "sign in", "related posts", "latest posts") if token in lower)
+            candidates.append((len(text) - penalty, text))
 
-    candidate = re.sub(r"<(nav|header|footer|aside|script|style|noscript|form)[^>]*>[\s\S]*?</\1>", " ", candidate, flags=re.I)
-    text = clean_text(candidate)
-    return truncate(text, MAX_CONTENT_CHARS)
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return truncate(candidates[0][1], MAX_CONTENT_CHARS)
+
+    body = find_first([r"<body[^>]*>([\\s\\S]*?)</body>"], html)
+    body = re.sub(r"<(nav|header|footer|aside|script|style|noscript|form)[^>]*>[\\s\\S]*?</\\1>", " ", body, flags=re.I)
+    return truncate(clean_text(body), MAX_CONTENT_CHARS)
 
 
 def discover_moc_article_links(html, base_url):
@@ -1483,6 +1531,14 @@ async def process_item(env, source, source_id, item):
     if not record["title"] or not record["canonical_url"]:
         return {"status": "skip", "reason": "missing title/url"}
 
+    quality_ok, quality_len = content_quality(record["content"])
+    if not quality_ok:
+        return {
+            "status": "insufficient_content",
+            "content_length": quality_len,
+            "reason": f"insufficient_content: {quality_len} chars; minimum {MIN_CONTENT_CHARS}",
+        }
+
     existing = await find_article_by_url(env, record["canonical_url"])
     article_id = existing.get("id") if existing else None
 
@@ -1710,15 +1766,22 @@ async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
                 new_count += 1
                 if result.get("stored_image_url"):
                     images_stored += 1
+                await update_queue_item(env, qid, {
+                    "status": "done",
+                    "processed_at": now_iso(),
+                    "last_error": None,
+                })
+                done += 1
             elif result["status"] == "duplicate":
                 duplicates += 1
-
-            await update_queue_item(env, qid, {
-                "status": "done",
-                "processed_at": now_iso(),
-                "last_error": None,
-            })
-            done += 1
+                await update_queue_item(env, qid, {
+                    "status": "done",
+                    "processed_at": now_iso(),
+                    "last_error": None,
+                })
+                done += 1
+            else:
+                raise RuntimeError(result.get("reason") or "content validation failed")
         except Exception as exc:
             message = truncate(str(exc), 2000)
             next_status = "failed" if attempts >= 3 else "queued"
