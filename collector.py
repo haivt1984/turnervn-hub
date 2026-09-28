@@ -45,7 +45,7 @@ USER_AGENT = (
     "(+https://example.invalid/contact; respectful crawler)"
 )
 REQUEST_TIMEOUT_MS = 15000  # reserved for future AbortSignal-based timeout handling
-MAX_ARTICLES_PER_SOURCE = 20
+MAX_ARTICLES_PER_SOURCE = 100
 MAX_CONTENT_CHARS = 120000
 MAX_DESCRIPTION_CHARS = 1000
 MAX_TITLE_CHARS = 500
