@@ -622,6 +622,65 @@ def extract_image(html, base_url):
     return ""
 
 
+def extract_moc_published(html):
+    raw = find_first([
+        r'<span[^>]+class=["\'][^"\']*News_Time_Post[^"\']*["\'][^>]*>([\s\S]*?)</span>',
+    ], html)
+    text = clean_text(raw)
+    m = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})', text)
+    if m:
+        try:
+            day, month, year, hour, minute = [int(x) for x in m.groups()]
+            local_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc) - timedelta(hours=7)
+            return local_dt.isoformat()
+        except Exception:
+            pass
+    return extract_published(html)
+
+
+def extract_moc_main_text(html):
+    candidates = []
+    for ident in ("divArticleDescription1", "divArticleDescription2", "divArticleDescription3"):
+        value = find_first([
+            rf'<div[^>]+id=["\']{ident}["\'][^>]*>([\s\S]*?)</div>',
+        ], html)
+        text = clean_text(value)
+        if len(text) > 80:
+            candidates.append(text)
+
+    # MOC's main article description is normally in description1/2/3.
+    content = " ".join(dict.fromkeys(candidates))
+    if len(content) >= 100:
+        return truncate(content, MAX_CONTENT_CHARS)
+
+    value = find_first([
+        r'<div[^>]+class=["\'][^"\']*Around_News_Content[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+    ], html)
+    return truncate(clean_text(value), MAX_CONTENT_CHARS)
+
+
+def extract_moc_image(html, base_url):
+    # Prefer images inside the article content, excluding common UI assets.
+    content_html = find_first([
+        r'<div[^>]+id=["\']divArticleDescription[123]["\'][^>]*>([\s\S]*?)</div>',
+        r'<div[^>]+class=["\'][^"\']*Around_News_Content[^"\']*["\'][^>]*>([\s\S]*?)</div>',
+    ], html) or ""
+
+    candidates = []
+    for m in re.finditer(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', content_html, flags=re.I):
+        candidates.append(urljoin(base_url, m.group(1)))
+
+    for candidate in candidates:
+        low = urlparse(candidate).path.lower()
+        if any(x in low for x in ("logo", "keyword", "icon", "favicon", "loading", "sprite", "avatar")):
+            continue
+        if any(low.endswith(x) for x in (".svg", ".ico", ".gif")):
+            continue
+        return candidate
+
+    return extract_image(html, base_url)
+
+
 def extract_main_text(html):
     # Prefer article/main containers; strip obvious navigation/footer blocks.
     candidate = ""
@@ -749,14 +808,16 @@ async def fetch_html_candidate(url, source):
     if not resp.ok:
         raise RuntimeError(f"HTTP {resp.status}")
     html = await response_text(resp)
+    is_moc = source.get("name") == "Ministry of Construction"
+
     return {
         "title": extract_title(html),
         "url": canonicalize_url(url),
         "description": extract_description(html),
         "author": extract_author(html),
-        "published_at": extract_published(html),
-        "image_url": extract_image(html, url),
-        "content": extract_main_text(html),
+        "published_at": extract_moc_published(html) if is_moc else extract_published(html),
+        "image_url": extract_moc_image(html, url) if is_moc else extract_image(html, url),
+        "content": extract_moc_main_text(html) if is_moc else extract_main_text(html),
         "category": source.get("category", "General"),
         "content_type": source.get("content_type", "NEWS"),
     }
