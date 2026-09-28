@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.7-20260928"
+BUILD_VERSION = "batch-v2.8-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -729,50 +729,64 @@ def extract_main_text(html):
 
 
 def discover_moc_article_links(html, base_url):
-    """
-    Robust MOC-specific discovery. MOC may return article links as:
-      /vn/Pages/chitiettin.aspx?ChuyenmucID=1173&IDNews=...
-    or newer /vn/tin-tuc/.../*.aspx routes.
-    """
     links = []
     seen = set()
 
-    # First, inspect all href attribute values.
-    href_values = re.findall(r"""href\s*=\s*["']([^"']+)["']""", html, flags=re.I)
-
-    # MOC article URLs are discovered from href attributes.
-    # Keep this parser deliberately simple to avoid regex portability issues.
-    for value in href_values:
-        value = unescape(value).strip()
-        if not value:
-            continue
-
+    for match in re.finditer(
+        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
+        html,
+        flags=re.I,
+    ):
+        value = unescape(match.group(1)).strip()
+        label = clean_text(match.group(2))
         href = urljoin(base_url, value)
+
         if not href.startswith(("http://", "https://")):
             continue
 
         parsed = urlparse(href)
-        host = parsed.netloc.lower()
-        if host not in {"moc.gov.vn", "www.moc.gov.vn"}:
+        if parsed.netloc.lower() not in {"moc.gov.vn", "www.moc.gov.vn"}:
             continue
 
         path = parsed.path.lower()
         query = unescape(parsed.query).lower()
-
-        is_detail = (
+        if not (
             (path.endswith("/chitiettin.aspx") and "idnews=" in query)
             or ("/vn/tin-tuc/" in path and path.endswith(".aspx"))
+        ):
+            continue
+
+        canonical = canonicalize_url(href)
+        if canonical in seen:
+            continue
+
+        local = html[max(0, match.start() - 900):min(len(html), match.end() + 1800)]
+        dm = re.findall(
+            r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
+            r'(?:\s+(\d{1,2})\s*:\s*(\d{2}))?',
+            clean_text(unescape(local)),
         )
 
-        if not is_detail:
-            continue
+        published_at = None
+        if dm:
+            vals = dm[-1]
+            try:
+                day, month, year = int(vals[0]), int(vals[1]), int(vals[2])
+                hour = int(vals[3] or 0)
+                minute = int(vals[4] or 0)
+                published_at = datetime(
+                    year, month, day, hour, minute,
+                    tzinfo=timezone(timedelta(hours=7)),
+                ).isoformat()
+            except Exception:
+                published_at = None
 
-        href = canonicalize_url(href)
-        if href in seen:
-            continue
-
-        seen.add(href)
-        links.append((href, ""))
+        seen.add(canonical)
+        links.append({
+            "url": canonical,
+            "title": label,
+            "published_at": published_at,
+        })
 
         if len(links) >= MAX_ARTICLES_PER_SOURCE:
             break
@@ -1178,35 +1192,34 @@ async def process_item(env, source, source_id, item):
 # ARTICLE QUEUE
 # ============================================================
 
-async def queue_articles_bulk(env, source_id, urls):
-    clean_urls = []
+async def queue_articles_bulk(env, source_id, items):
+    clean_items = []
     seen = set()
-    for url in urls:
-        key = canonicalize_url(url)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        clean_urls.append(key)
 
-    if not clean_urls:
+    for item in items:
+        url = canonicalize_url(item.get("url"))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        clean_items.append({
+            "source_id": source_id,
+            "url": url,
+            "discovered_title": truncate(clean_text(item.get("title")), MAX_TITLE_CHARS) or None,
+            "published_at": item.get("published_at"),
+            "status": "queued",
+            "attempts": 0,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        })
+
+    if not clean_items:
         return 0
 
-    rows = [{
-        "source_id": source_id,
-        "url": url,
-        "status": "queued",
-        "attempts": 0,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-    } for url in clean_urls]
-
-    # PostgREST needs the conflict target explicitly for reliable bulk
-    # ignore-duplicates behavior with our unique URL index.
     resp = await sb_request(
         env,
         "POST",
         "/rest/v1/hub_article_queue?on_conflict=url",
-        rows,
+        clean_items,
         {"Prefer": "resolution=ignore-duplicates,return=representation"},
     )
     if not resp.ok:
@@ -1283,7 +1296,7 @@ async def discover_moc_batch(env, source, start_page=1, pages=DISCOVERY_PAGES_PE
             queued += await queue_articles_bulk(
                 env,
                 source_id,
-                [url for url, _ in links],
+                links,
             )
         except Exception as exc:
             queue_errors.append(str(exc))
