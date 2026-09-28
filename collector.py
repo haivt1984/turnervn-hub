@@ -649,7 +649,7 @@ def discover_moc_article_links(html, base_url):
     links = []
     seen = set()
 
-    href_pattern = r'href\\s*=\\s*["\\']([^"\\']+)["\\']'
+    href_pattern = r'href\s*=\s*["\']([^"\']+)["\']'
     for m in re.finditer(href_pattern, html, flags=re.I):
         href = urljoin(base_url, m.group(1))
         if not href.startswith(("http://", "https://")):
@@ -718,7 +718,7 @@ def discover_html_links(html, base_url, source=None):
 
         if any(x in href.lower() for x in (
             "/login", "/signup", "/privacy", "/terms", "/search",
-            "/contact", "/rss", "/sitemap", "/pages/"
+            "/contact", "/rss", "/sitemap"
         )):
             continue
 
