@@ -75,7 +75,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Legal & Regulation",
         "content_type": "LEGAL",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Vietnam National Statistics Office",
@@ -83,7 +83,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Vietnam Market",
         "content_type": "MARKET_INTELLIGENCE",
-        "active": False,
+        "active": True,
     },
 
     # ---- Construction / technology ----
@@ -93,7 +93,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Construction Dive",
@@ -101,7 +101,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Procore",
@@ -109,7 +109,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": False,
+        "active": True,
     },
     {
         "name": "OpenSpace",
@@ -117,7 +117,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": False,
+        "active": True,
     },
     {
         "name": "DroneDeploy",
@@ -125,7 +125,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": False,
+        "active": True,
     },
     {
         "name": "HoloBuilder / FARO",
@@ -133,7 +133,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "UPDATE",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Autodesk Construction",
@@ -141,7 +141,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Construction Technology",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
 
     # ---- Microsoft 365 ----
@@ -151,7 +151,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Microsoft Teams",
@@ -159,7 +159,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Microsoft Planner",
@@ -167,7 +167,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Microsoft Power BI",
@@ -175,7 +175,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
     {
         "name": "Microsoft Power Platform",
@@ -183,7 +183,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Microsoft 365",
         "content_type": "NEWS",
-        "active": False,
+        "active": True,
     },
 
     # ---- Turner ----
@@ -193,7 +193,7 @@ SOURCES = [
         "feed_url": "",
         "category": "Turner Global",
         "content_type": "TURNER_INTERNAL",
-        "active": False,
+        "active": True,
     },
 ]
 
@@ -686,6 +686,51 @@ async def fetch_html_candidate(url, source):
     }
 
 
+async def discover_feed_url(source, html=None):
+    """
+    Discover an RSS/Atom feed advertised by the source page.
+    Checks HTML <link> declarations first, then a few conventional paths.
+    """
+    base = source.get("page_url", "")
+    if html:
+        for m in re.finditer(
+            r'<link[^>]+(?:type=["\']application/(?:rss|atom)\+xml["\'][^>]+href|href=["\'][^"\']+["\'][^>]+type=["\']application/(?:rss|atom)\+xml["\'])[^>]*>',
+            html,
+            flags=re.I,
+        ):
+            tag = m.group(0)
+            href = re.search(r'href=["\']([^"\']+)["\']', tag, flags=re.I)
+            if href:
+                return canonicalize_url(urljoin(base, href.group(1)))
+
+    candidates = [
+        urljoin(base, "/rss.xml"),
+        urljoin(base, "/feed/"),
+        urljoin(base, "/feed.xml"),
+        urljoin(base, "/rss/"),
+        urljoin(base, "/atom.xml"),
+    ]
+
+    # Microsoft and common blog conventions.
+    parsed = urlparse(base)
+    host_root = f"{parsed.scheme}://{parsed.netloc}"
+    candidates.extend([
+        urljoin(host_root, "/feed/"),
+        urljoin(host_root, "/rss.xml"),
+    ])
+
+    for candidate in candidates:
+        try:
+            resp = await http_get(candidate, "application/rss+xml,application/atom+xml,text/xml,*/*")
+            if resp.ok:
+                text = await response_text(resp)
+                if "<rss" in text[:1000].lower() or "<feed" in text[:1000].lower():
+                    return canonicalize_url(candidate)
+        except Exception:
+            continue
+
+    return ""
+
 async def crawl_html_source(source):
     results = []
     discovery_url = source.get("discovery_url") or source["page_url"]
@@ -693,6 +738,20 @@ async def crawl_html_source(source):
     if not resp.ok:
         raise RuntimeError(f"HTTP {resp.status} for {discovery_url}")
     html = await response_text(resp)
+
+    # Prefer an advertised RSS/Atom feed where available.
+    discovered_feed = await discover_feed_url(source, html)
+    if discovered_feed:
+        try:
+            feed_items = await crawl_rss_source({
+                **source,
+                "feed_url": discovered_feed,
+            })
+            if feed_items:
+                return feed_items[:MAX_ARTICLES_PER_SOURCE]
+        except Exception as exc:
+            print("discovered RSS failed:", source["name"], discovered_feed, str(exc))
+
     links = discover_html_links(html, discovery_url, source)
 
     for url, label in links:
@@ -741,7 +800,7 @@ async def crawl_rss_source(source):
             print("RSS article enrichment failed:", source["name"], str(exc))
             item["content"] = item.get("description", "")
         enriched.append(item)
-    return enriched
+    return enriched[:MAX_ARTICLES_PER_SOURCE]
 
 
 # ============================================================
@@ -1019,6 +1078,34 @@ class Default(WorkerEntrypoint):
 
             if not env.COLLECTOR_TOKEN or token != env.COLLECTOR_TOKEN:
                 return Response("Unauthorized", status=401)
+
+            q = parse_qs(urlparse(url).query)
+            requested_source = (q.get("source") or [""])[0].strip()
+
+            if requested_source:
+                matches = [s for s in SOURCES if s.get("name", "").lower() == requested_source.lower()]
+                if not matches:
+                    return Response(
+                        json.dumps({"status": "error", "error": "Unknown source", "source": requested_source}),
+                        status=404,
+                        headers={"Content-Type": "application/json"},
+                    )
+                source = matches[0]
+                result = await crawl_one_source(env, source)
+                return Response(
+                    json.dumps({"time": now_iso(), "totals": {
+                        "sources": 1,
+                        "success": 1 if result["status"] == "success" else 0,
+                        "errors": 1 if result["status"] == "error" else 0,
+                        "found": result["found"],
+                        "new": result["new"],
+                        "duplicates": result["duplicates"],
+                        "skipped": result.get("skipped", 0),
+                        "images_stored": result.get("images_stored", 0),
+                        "images_failed": result.get("images_failed", 0),
+                    }, "sources": [result]}, indent=2),
+                    headers={"Content-Type": "application/json"},
+                )
 
             result = await run_collector(env)
             return Response(json.dumps(result, indent=2), headers={"Content-Type": "application/json"})
