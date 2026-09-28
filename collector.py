@@ -19,7 +19,7 @@ What it does:
 - Deduplicates by canonical URL and content hash.
 - Stores articles in Supabase Postgres via REST API.
 - Downloads primary article images to Supabase Storage when possible.
-- Logs each crawl to crawl_logs.
+- Logs each crawl to hub_crawl_logs.
 - Exposes a health endpoint at /.
 - Exposes a protected manual run endpoint:
       /?action=run&token=YOUR_COLLECTOR_TOKEN
@@ -395,7 +395,7 @@ async def insert_image_record(env, image_record):
     resp = await sb_request(
         env,
         "POST",
-        "/rest/v1/hub_article_images",
+        "/rest/v1/hub_hub_article_images",
         image_record,
         {"Prefer": "return=minimal"},
     )
@@ -405,7 +405,7 @@ async def insert_image_record(env, image_record):
 
 async def insert_log(env, log_record):
     try:
-        await sb_request(env, "POST", "/rest/v1/hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
+        await sb_request(env, "POST", "/rest/v1/hub_hub_crawl_logs", log_record, {"Prefer": "return=minimal"})
     except Exception as exc:
         print("crawl log error:", str(exc))
 
