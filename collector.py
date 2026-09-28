@@ -62,7 +62,8 @@ SOURCES = [
     # ---- Vietnam / official ----
     {
         "name": "Ministry of Construction",
-        "page_url": "https://moc.gov.vn/vn/tin-tuc/",
+        "page_url": "https://moc.gov.vn/",
+        "discovery_url": "https://moc.gov.vn/vn/chuyen-muc/1205/tin-tuc.aspx",
         "feed_url": "",
         "category": "Vietnam & Regulation",
         "content_type": "NEWS",
@@ -686,11 +687,12 @@ async def fetch_html_candidate(url, source):
 
 async def crawl_html_source(source):
     results = []
-    resp = await http_get(source["page_url"], "text/html,application/xhtml+xml")
+    discovery_url = source.get("discovery_url") or source["page_url"]
+    resp = await http_get(discovery_url, "text/html,application/xhtml+xml")
     if not resp.ok:
-        raise RuntimeError(f"HTTP {resp.status}")
+        raise RuntimeError(f"HTTP {resp.status} for {discovery_url}")
     html = await response_text(resp)
-    links = discover_html_links(html, source["page_url"], source)
+    links = discover_html_links(html, discovery_url, source)
 
     for url, label in links:
         try:
