@@ -1130,7 +1130,7 @@ async def crawl_one_source(env, source):
         if source.get("feed_urls"):
             items.extend(await crawl_multi_feed_source(source))
 
-        if source.get("pagination", {}).get("enabled") and len(items) < MAX_ARTICLES_PER_SOURCE:
+        if source.get("pagination", {}).get("enabled"):
             pagination_items = await crawl_pagination_source(source)
             seen_urls = {canonicalize_url(x.get("url", "")) for x in items}
             for item in pagination_items:
@@ -1304,6 +1304,9 @@ class Default(WorkerEntrypoint):
                         "skipped": result.get("skipped", 0),
                         "images_stored": result.get("images_stored", 0),
                         "images_failed": result.get("images_failed", 0),
+                        "pagination_found": result.get("pagination_found", 0),
+                        "pagination_pages_visited": result.get("pagination_pages_visited", 0),
+                        "pagination_raw_links_seen": result.get("pagination_raw_links_seen", 0),
                     }, "sources": [result]}, indent=2),
                     headers={"Content-Type": "application/json"},
                 )
