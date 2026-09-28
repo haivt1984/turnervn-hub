@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v5.2-20260928"
+BUILD_VERSION = "batch-v5.3-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1044,6 +1044,8 @@ def discover_tech_blog_links(html, base_url, source_name):
             valid = "/blog/" in path and "/page/" not in path and path != "/blog"
         elif source_name == "DroneDeploy":
             valid = "/blog/" in path and path != "/blog"
+        elif source_name == "Autodesk Construction":
+            valid = "/blogs/construction/" in path and path != "/blogs/construction"
 
         if not valid:
             continue
@@ -1069,6 +1071,7 @@ async def discover_tech_blog_batch(env, source):
         "Procore": "https://www.procore.com/blog",
         "OpenSpace": "https://www.openspace.ai/blog/",
         "DroneDeploy": "https://www.dronedeploy.com/blog",
+        "Autodesk Construction": "https://www.autodesk.com/blogs/construction/",
     }
     page_url = source.get("page_url") or defaults.get(source.get("name"), "")
     if not page_url:
@@ -2037,7 +2040,7 @@ class Default(WorkerEntrypoint):
                     pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
                     if source.get("name") == "Thu Vien Phap Luat":
                         result = await discover_tvpl_rss_batch(env, source)
-                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy"}:
+                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy", "Autodesk Construction"}:
                         result = await discover_tech_blog_batch(env, source)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
@@ -2112,20 +2115,47 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Scheduled safe batches:
-        # MOC = paginated full-content collection.
+        # Scheduled safe batches.
+        # MOC = paginated full-content.
         # TVPL = RSS discovery-only.
-        # Procore/OpenSpace/DroneDeploy = public blog discovery + batch processing.
+        # Procore/OpenSpace = full-content.
+        # DroneDeploy = discovery-only until full-content extraction is reliable.
+        # Autodesk Construction = public blog full-content.
         for source_name in (
             "Ministry of Construction",
             "Thu Vien Phap Luat",
             "Procore",
             "OpenSpace",
             "DroneDeploy",
+            "Autodesk Construction",
         ):
             source = next((s for s in SOURCES if s.get("name") == source_name), None)
             if not source:
                 continue
+
+            try:
+                if source_name == "Thu Vien Phap Luat":
+                    await discover_tvpl_rss_batch(env, source)
+                elif source_name in {"Procore", "OpenSpace", "DroneDeploy", "Autodesk Construction"}:
+                    await discover_tech_blog_batch(env, source)
+                else:
+                    source_id = await get_or_create_source(env, source)
+                    next_page = await get_source_pagination_page(env, source_id, 1)
+                    await discover_moc_batch(
+                        env, source, next_page, DISCOVERY_PAGES_PER_RUN
+                    )
+                    await set_source_pagination_page(
+                        env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
+                    )
+            except Exception as exc:
+                print("scheduled discovery failed:", source_name, str(exc))
+
+            if source_name not in {"Thu Vien Phap Luat", "DroneDeploy"}:
+                try:
+                    await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
+                except Exception as exc:
+                    print("scheduled processing failed:", source_name, str(exc))
+
 
             try:
                 if source_name == "Thu Vien Phap Luat":
