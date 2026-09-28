@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.7-20260928"
+BUILD_VERSION = "batch-v1.8-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1054,7 +1054,7 @@ def build_article_record(source, source_id, item):
         "description": description,
         "content": content,
         "author": truncate(clean_text(item.get("author")), 200),
-        "published_at": item.get("published_at") or now_iso(),
+        "published_at": item.get("published_at"),
         "crawled_at": now_iso(),
         "category": item.get("category") or source.get("category") or "General",
         "image_url": item.get("image_url") or None,
