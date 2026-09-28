@@ -1230,28 +1230,39 @@
     }
 
     function renderReader(article) {
-      const article = allArticles.find(a => String(a.id) === String(id));
       if (!article) return;
-      selectedArticle = article;
 
       $("pageImage").src = article.image_url || placeholderImage();
-      $("pageImage").onerror = () => $("pageImage").src = placeholderImage();
+      $("pageImage").onerror = () => {
+        $("pageImage").src = placeholderImage();
+      };
 
       const title = localizedArticleField(article, "title_vi", "title_en", "title");
-      const summary = localizedArticleField(article, "summary_vi", "summary_en", "ai_summary") ||
-                      article.description || "";
-      const content = localizedArticleField(article, "content_vi", "content_en", "content") ||
-                      article.description ||
-                      (uiLanguage === "vi" ? "Nội dung đầy đủ chưa được lưu." : "Full article content is not stored.");
+      const summary =
+        localizedArticleField(article, "summary_vi", "summary_en", "ai_summary") ||
+        article.description ||
+        "";
+      const content =
+        localizedArticleField(article, "content_vi", "content_en", "content") ||
+        article.description ||
+        (uiLanguage === "vi"
+          ? "Nội dung đầy đủ chưa được lưu."
+          : "Full article content is not stored.");
 
       $("pageChips").innerHTML = `
-        <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || "General")}</span>
-        ${article.relevance === "high" ? '<span class="chip red">TURNER RELEVANT</span>' : ""}
+        <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || (uiLanguage === "vi" ? "Chung" : "General"))}</span>
+        ${article.relevance === "high"
+          ? '<span class="chip red">' + (uiLanguage === "vi" ? "LIÊN QUAN TURNER" : "TURNER RELEVANT") + "</span>"
+          : ""}
       `;
 
       $("pageTitle").textContent = title;
+      $("readerSourceLabel").textContent =
+        (uiLanguage === "vi" ? "Nguồn: " : "Source: ") +
+        (article.source_name || (uiLanguage === "vi" ? "Không rõ nguồn" : "Unknown source"));
+
       $("pageMeta").innerHTML = `
-        <span class="source">${uiLanguage === "vi" ? "Nguồn" : "Source"}: ${escapeHtml(article.source_name || "Unknown source")}</span>
+        <span class="source">${escapeHtml(article.source_name || (uiLanguage === "vi" ? "Không rõ nguồn" : "Unknown source"))}</span>
         <span>·</span>
         <span>${escapeHtml(formatDate(articleDate(article)))}</span>
         ${article.author ? `<span>·</span><span>${escapeHtml(article.author)}</span>` : ""}
@@ -1268,19 +1279,8 @@
         ? "Đọc bài gốc · " + sourceName
         : "Read original · " + sourceName;
 
-      document.body.classList.add("reading-mode");
       $("articlePage").classList.add("open");
-
-      applyUILanguage();
-
-      if (pushState) {
-        const url = new URL(window.location.href);
-        url.searchParams.set("article", article.id);
-        history.pushState({articleId: article.id}, "", url);
-      }
-
       document.body.classList.add("reading-mode");
-      $("articlePage").classList.add("open");
     }
 
     function openArticle(id, pushState = true) {
@@ -1296,6 +1296,7 @@
       }
       window.scrollTo({top:0, behavior:"smooth"});
     }
+
 
 function closeArticlePage(pushState = true) {
       $("articlePage").classList.remove("open");
