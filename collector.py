@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.8-20260928"
+BUILD_VERSION = "batch-v2.9-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1206,27 +1206,26 @@ async def queue_articles_bulk(env, source_id, items):
             "url": url,
             "discovered_title": truncate(clean_text(item.get("title")), MAX_TITLE_CHARS) or None,
             "published_at": item.get("published_at"),
-            "status": "queued",
-            "attempts": 0,
-            "created_at": now_iso(),
             "updated_at": now_iso(),
         })
 
     if not clean_items:
         return 0
 
+    # Merge only discovery metadata. Do not send status/attempts so existing
+    # queue processing state is preserved.
     resp = await sb_request(
         env,
         "POST",
         "/rest/v1/hub_article_queue?on_conflict=url",
         clean_items,
-        {"Prefer": "resolution=ignore-duplicates,return=representation"},
+        {"Prefer": "resolution=merge-duplicates,return=representation"},
     )
     if not resp.ok:
-        raise RuntimeError("Bulk queue insert failed: " + await resp.text())
+        raise RuntimeError("Bulk queue sync failed: " + await resp.text())
 
-    inserted = json.loads(await resp.text() or "[]")
-    return len(inserted)
+    synced = json.loads(await resp.text() or "[]")
+    return len(synced)
 
 
 async def queue_article(env, source_id, url):
