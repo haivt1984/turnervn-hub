@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v4.2-20260928"
+BUILD_VERSION = "batch-v4.3-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1576,25 +1576,28 @@ def discover_vbpl_article_links(html, base_url):
     links = []
     seen = set()
 
-    href_values = re.findall(
-        r'href\s*=\s*["\']([^"\']+)["\']',
-        html,
-        flags=re.I,
-    )
+    # VBPL pages may render document links as plain text, encoded markup,
+    # or HTML attributes. Scan the entire response for official detail URLs.
+    patterns = [
+        r'(?:https?:)?//vbpl\.vn/[^"\'<>\s]*?/Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
+        r'/[^"\'<>\s]*Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
+        r'Pages/vbpq-(?:toanvan|van-ban-goc|van-bangoc)\.aspx\?[^"\'<>\s]*ItemID=\\?\d+[^"\'<>\s]*',
+    ]
 
-    for raw in href_values:
-        href = urljoin(base_url, unescape(raw).strip())
+    raw_urls = []
+    for pattern in patterns:
+        raw_urls.extend(re.findall(pattern, html, flags=re.I))
+
+    for raw in raw_urls:
+        cleaned = unescape(raw).replace("\\/", "/").strip()
+        href = urljoin(base_url, cleaned)
+        if "vbpl.vn" not in href.lower() or "itemid=" not in href.lower():
+            continue
+
         low = href.lower()
-
-        if "vbpl.vn" not in low:
-            continue
-
-        if "itemid=" not in low:
-            continue
-
         if not any(
-            marker in low
-            for marker in (
+            x in low
+            for x in (
                 "vbpq-toanvan.aspx",
                 "vbpq-van-ban-goc.aspx",
                 "vbpq-van-bangoc.aspx",
@@ -1606,18 +1609,17 @@ def discover_vbpl_article_links(html, base_url):
         if canonical in seen:
             continue
 
-        parsed = urlparse(canonical)
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        if not any(k.lower() == "itemid" for k in query):
-            continue
-
-        # Get a nearby title from the listing if present.
-        idx = html.find(raw)
-        local = html[max(0, idx - 900):min(len(html), idx + 1600)] if idx >= 0 else ""
+        # Try to recover a nearby document title from the page.
+        idx = html.lower().find(cleaned.lower())
+        local = html[max(0, idx - 1200):min(len(html), idx + 1800)] if idx >= 0 else ""
         title = ""
-        tm = re.findall(r'<a[^>]*>([\s\S]{8,500})</a>', local, flags=re.I)
-        if tm:
-            title = clean_text(tm[-1])
+        title_matches = re.findall(
+            r'<a[^>]*>([\s\S]{8,500})</a>',
+            local,
+            flags=re.I,
+        )
+        if title_matches:
+            title = clean_text(title_matches[-1])
 
         seen.add(canonical)
         links.append({
