@@ -433,6 +433,7 @@ async def upload_storage(env, bucket, path, content_bytes, mime_type):
         "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
         "Authorization": "Bearer " + env.SUPABASE_SERVICE_ROLE_KEY,
         "Content-Type": mime_type or "application/octet-stream",
+        "Cache-Control": "public, max-age=31536000, immutable",
         "x-upsert": "true",
     }
     resp = await fetch(
@@ -762,25 +763,23 @@ def extension_from_content_type(mime):
 
 async def store_primary_image(env, article_id, article_url, image_url):
     if not image_url:
-        return ""
+        return "", "no_image_url"
     try:
         image_url = canonicalize_url(image_url)
         resp = await http_get(image_url, "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
         if not resp.ok:
-            return ""
+            return "", f"image_http_{resp.status}"
         content_type = resp.headers.get("content-type", "application/octet-stream")
         if not content_type.lower().startswith("image/"):
-            return ""
+            return "", "not_an_image"
 
-        data = await resp.arrayBuffer()
-        # JS ArrayBuffer is exposed to Python as a bytes-like value in Workers.
-        try:
-            content = bytes(data)
-        except Exception:
-            content = data
+        content = await resp.bytes()
+
+        if len(content) == 0:
+            return "", "empty_image"
 
         if len(content) > MAX_IMAGE_BYTES:
-            return ""
+            return "", "image_too_large"
 
         ext = extension_from_content_type(content_type)
         safe_hash = sha256_text(image_url)[:16]
@@ -795,10 +794,10 @@ async def store_primary_image(env, article_id, article_url, image_url):
             "is_primary": True,
             "created_at": now_iso(),
         })
-        return public_url
+        return public_url, None
     except Exception as exc:
         print("image store failed:", image_url, str(exc))
-        return ""
+        return "", str(exc)
 
 
 # ============================================================
@@ -845,9 +844,10 @@ async def process_item(env, source, source_id, item):
 
     article_id = await insert_article(env, record)
     stored_image_url = ""
+    image_error = None
 
     if article_id and record.get("image_url"):
-        stored_image_url = await store_primary_image(
+        stored_image_url, image_error = await store_primary_image(
             env,
             article_id,
             record["canonical_url"],
@@ -866,7 +866,12 @@ async def process_item(env, source, source_id, item):
             except Exception as exc:
                 print("article image URL update failed:", str(exc))
 
-    return {"status": "new", "article_id": article_id, "stored_image_url": stored_image_url}
+    return {
+        "status": "new",
+        "article_id": article_id,
+        "stored_image_url": stored_image_url,
+        "image_error": image_error,
+    }
 
 
 # ============================================================
@@ -881,6 +886,8 @@ async def crawl_one_source(env, source):
     new_count = 0
     duplicate_count = 0
     skipped_count = 0
+    images_stored = 0
+    images_failed = 0
     status = "success"
     error_message = None
 
@@ -896,6 +903,10 @@ async def crawl_one_source(env, source):
                 result = await process_item(env, source, source_id, item)
                 if result["status"] == "new":
                     new_count += 1
+                    if result.get("stored_image_url"):
+                        images_stored += 1
+                    elif result.get("image_error"):
+                        images_failed += 1
                 elif result["status"] == "duplicate":
                     duplicate_count += 1
                 elif result["status"] == "skip":
@@ -927,6 +938,8 @@ async def crawl_one_source(env, source):
         "new": new_count,
         "duplicates": duplicate_count,
         "skipped": skipped_count,
+        "images_stored": images_stored,
+        "images_failed": images_failed,
         "error": error_message,
     }
 
@@ -946,6 +959,8 @@ async def run_collector(env):
                 "new": 0,
                 "duplicates": 0,
                 "skipped": 0,
+                "images_stored": 0,
+                "images_failed": 0,
                 "error": str(exc),
             }
         results.append(result)
@@ -958,6 +973,8 @@ async def run_collector(env):
         "new": sum(r["new"] for r in results),
         "duplicates": sum(r["duplicates"] for r in results),
         "skipped": sum(r.get("skipped", 0) for r in results),
+        "images_stored": sum(r.get("images_stored", 0) for r in results),
+        "images_failed": sum(r.get("images_failed", 0) for r in results),
     }
 
     print("COLLECTOR TOTALS:", json.dumps(totals))
