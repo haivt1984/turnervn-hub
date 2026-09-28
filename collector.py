@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v1.1-20260928"
+BUILD_VERSION = "batch-v1.3-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1422,7 +1422,7 @@ class Default(WorkerEntrypoint):
 
             # Simple health endpoint. Any supported action is handled below.
             # Unknown/no action returns health.
-            if not any(("action=" + a) in url for a in ("run", "discover", "process")):
+            if not any(("action=" + a) in url for a in ("run", "discover", "process", "inspect")):
                 payload = {
                     "service": "Turner Vietnam News Collector",
                     "version": BUILD_VERSION,
