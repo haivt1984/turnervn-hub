@@ -54,6 +54,7 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
+BUILD_VERSION = "moc-pagination-v4-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -1260,6 +1261,7 @@ class Default(WorkerEntrypoint):
             if "action=run" not in url:
                 payload = {
                     "service": "Turner Vietnam News Collector",
+                    "version": BUILD_VERSION,
                     "status": "ok",
                     "time": now_iso(),
                     "sources_configured": len([s for s in SOURCES if s.get("active", True)]),
@@ -1294,7 +1296,7 @@ class Default(WorkerEntrypoint):
                 source = matches[0]
                 result = await crawl_one_source(env, source)
                 return Response(
-                    json.dumps({"time": now_iso(), "totals": {
+                    json.dumps({"time": now_iso(), "version": BUILD_VERSION, "totals": {
                         "sources": 1,
                         "success": 1 if result["status"] == "success" else 0,
                         "errors": 1 if result["status"] == "error" else 0,
