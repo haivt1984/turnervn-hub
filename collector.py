@@ -65,6 +65,15 @@ SOURCES = [
         "page_url": "https://moc.gov.vn/",
         "discovery_url": "https://moc.gov.vn/vn/chuyen-muc/1205/tin-tuc.aspx",
         "feed_url": "",
+        "feed_urls": [
+            "https://moc.gov.vn/rss/1176/tin-chi-dao--dieu-hanh.rss",
+            "https://moc.gov.vn/rss/1173/tin-hoat-dong.rss",
+            "https://moc.gov.vn/rss/1184/tin-tong-hop.rss",
+            "https://moc.gov.vn/rss/1196/gioi-thieu-van-ban-moi.rss",
+            "https://moc.gov.vn/rss/1166/tin-cai-cach-hanh-chinh.rss",
+            "https://moc.gov.vn/rss/1303/chien-luoc--quy-hoach--ke-hoach.rss",
+            "https://moc.gov.vn/rss/1207/thong-tin---tu-lieu.rss"
+        ],
         "category": "Vietnam & Regulation",
         "content_type": "NEWS",
         "active": True,
@@ -938,6 +947,33 @@ async def process_item(env, source, source_id, item):
 # ============================================================
 
 
+async def crawl_multi_feed_source(source):
+    combined = []
+    seen = set()
+
+    for feed_url in source.get("feed_urls", []):
+        try:
+            feed_source = {**source, "feed_url": feed_url}
+            items = await crawl_rss_source(feed_source)
+            for item in items:
+                key = canonicalize_url(item.get("url", ""))
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                combined.append(item)
+        except Exception as exc:
+            print("feed failed:", source["name"], feed_url, str(exc))
+
+    def sort_key(item):
+        try:
+            return datetime.fromisoformat((item.get("published_at") or "").replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0
+
+    combined.sort(key=sort_key, reverse=True)
+    return combined[:MAX_ARTICLES_PER_SOURCE]
+
+
 async def crawl_one_source(env, source):
     source_id = await get_or_create_source(env, source)
     started = now_iso()
@@ -951,7 +987,9 @@ async def crawl_one_source(env, source):
     error_message = None
 
     try:
-        if source.get("feed_url"):
+        if source.get("feed_urls"):
+            items = await crawl_multi_feed_source(source)
+        elif source.get("feed_url"):
             items = await crawl_rss_source(source)
         else:
             items = await crawl_html_source(source)
