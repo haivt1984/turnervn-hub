@@ -69,7 +69,7 @@ SOURCES = [
             "enabled": True,
             "url_template": "https://moc.gov.vn/vn/chuyen-muc/1173/tin-hoat-dong.aspx?page={page}",
             "start_page": 1,
-            "max_pages": 50
+            "max_pages": 60
         },
         "feed_urls": [
             "https://moc.gov.vn/rss/1176/tin-chi-dao--dieu-hanh.rss",
@@ -645,7 +645,7 @@ def discover_html_links(html, base_url, source=None):
     seen = set()
 
     if source and source.get("name") == "Ministry of Construction":
-        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']*/[0-9]+/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
+        pattern = r'<a[^>]+href=["\']([^"\']*/vn/tin-tuc/[^"\']+?\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>'
     else:
         pattern = r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>'
 
