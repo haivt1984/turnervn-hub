@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v2.5-20260928"
+BUILD_VERSION = "batch-v2.6-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -623,25 +623,16 @@ def extract_image(html, base_url):
 
 
 def extract_moc_published(html):
-    # MOC places the article timestamp after the article title. Some pages
-    # contain another description block before the title, so the search window
-    # must start strictly after the title element.
-    title_match = re.search(
-        r'<h1[^>]*class=["\'][^"\']*News_Detail_Title[^"\']*["\'][^>]*>[\s\S]*?</h1>',
-        html,
-        flags=re.I,
-    )
+    # MOC article pages include the literal News_Time_Post marker near the
+    # article timestamp. Search a generous bounded window around that marker.
+    marker = re.search(r'News_Time_Post', html, flags=re.I)
+    if not marker:
+        return None
 
-    if title_match:
-        window = html[title_match.end():title_match.end() + 8000]
-    else:
-        # Fallback to the explicit time marker.
-        marker = re.search(r'News_Time_Post', html, flags=re.I)
-        window = html[marker.start():marker.start() + 4000] if marker else ""
+    start = max(0, marker.start() - 3000)
+    end = min(len(html), marker.end() + 12000)
+    text = clean_text(unescape(html[start:end]))
 
-    text = clean_text(unescape(window))
-
-    # Article publication timestamp: DD/MM/YYYY HH:MM.
     match = re.search(
         r'(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})'
         r'\s+(\d{1,2})\s*:\s*(\d{2})',
@@ -1092,13 +1083,62 @@ def build_article_record(source, source_id, item):
     }
 
 
+async def find_article_by_url(env, canonical_url):
+    encoded = canonical_url.replace(" ", "%20")
+    path = "/rest/v1/hub_articles?select=id,title,content,published_at,image_url,content_hash&canonical_url=eq." + encoded + "&limit=1"
+    resp = await sb_request(env, "GET", path)
+    if not resp.ok:
+        return None
+    data = json.loads(await resp.text() or "[]")
+    return data[0] if data else None
+
+
 async def process_item(env, source, source_id, item):
     record = build_article_record(source, source_id, item)
     if not record["title"] or not record["canonical_url"]:
         return {"status": "skip", "reason": "missing title/url"}
 
-    if await article_exists(env, record["canonical_url"], record["content_hash"]):
-        return {"status": "duplicate"}
+    existing = await find_article_by_url(env, record["canonical_url"])
+    article_id = existing.get("id") if existing else None
+
+    if existing:
+        update_values = {
+            "title": record["title"],
+            "description": record["description"],
+            "content": record["content"],
+            "author": record["author"],
+            "published_at": record["published_at"],
+            "content_hash": record["content_hash"],
+            "category": record["category"],
+            "crawled_at": record["crawled_at"],
+        }
+        patch_path = "/rest/v1/hub_articles?id=eq." + str(article_id)
+        resp = await sb_request(env, "PATCH", patch_path, update_values, {"Prefer": "return=minimal"})
+        if not resp.ok:
+            raise RuntimeError("Supabase article update failed: " + await resp.text())
+        stored_image_url = ""
+        image_error = None
+        if record.get("image_url"):
+            stored_image_url, image_error = await store_primary_image(
+                env,
+                article_id,
+                record["canonical_url"],
+                record["image_url"],
+            )
+            if stored_image_url:
+                await sb_request(
+                    env,
+                    "PATCH",
+                    patch_path,
+                    {"image_url": stored_image_url},
+                    {"Prefer": "return=minimal"},
+                )
+        return {
+            "status": "updated",
+            "article_id": article_id,
+            "stored_image_url": stored_image_url,
+            "image_error": image_error,
+        }
 
     article_id = await insert_article(env, record)
     stored_image_url = ""
@@ -1130,6 +1170,8 @@ async def process_item(env, source, source_id, item):
         "stored_image_url": stored_image_url,
         "image_error": image_error,
     }
+
+
 
 
 # ============================================================
@@ -1277,7 +1319,7 @@ async def process_queue_batch(env, source, limit=PROCESS_BATCH_SIZE):
             item = await fetch_html_candidate(row["url"], source)
             result = await process_item(env, source, source_id, item)
 
-            if result["status"] == "new":
+            if result["status"] in {"new", "updated"}:
                 new_count += 1
                 if result.get("stored_image_url"):
                     images_stored += 1
