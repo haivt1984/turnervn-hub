@@ -1098,7 +1098,7 @@ async def crawl_pagination_source(source):
             print("pagination error:", source["name"], page_number, str(exc))
 
     source["_pagination_found"] = len(results)
-    source["_pagination_pages_visited"] = len(visited_pages)
+    source["_pagination_pages_visited"] = max_pages
     return results[:MAX_ARTICLES_PER_SOURCE]
 
 
