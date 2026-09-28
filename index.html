@@ -197,6 +197,7 @@
     }
     .article:last-child{border-bottom:0}
     .article:hover{background:#fbfcfd}
+    .article.clickable{cursor:pointer}
     .thumb{
       width:190px;height:120px;object-fit:cover;border-radius:12px;background:#e9edf2
     }
@@ -793,7 +794,9 @@
     function renderFeed() {
       const feed = $("feed");
       const items = filteredArticles();
-      $("resultCount").textContent = uiLanguage === "vi" ? `${items.length} bài` : `${items.length} item${items.length === 1 ? "" : "s"}`;
+      $("resultCount").textContent = uiLanguage === "vi"
+        ? (items.length + " bài")
+        : (items.length + " item" + (items.length === 1 ? "" : "s"));
 
       if (!items.length) {
         feed.innerHTML = `<div class="empty">${uiLanguage === "vi" ? "Không có bài viết phù hợp với bộ lọc." : "No articles match the current filters."}</div>`;
@@ -815,20 +818,20 @@
         }
 
         html += `
-          <article class="article">
+          <article class="article clickable" data-article-id="${escapeHtml(article.id)}" tabindex="0" role="link" aria-label="${escapeHtml(article.title)}">
             <img class="thumb" src="${escapeHtml(article.image_url || placeholderImage())}"
                  alt="" loading="lazy" onerror="this.src='${placeholderImage()}'" />
             <div>
               <div class="article-top">
                 <div class="chips">
-                  <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || "General")}</span>
-                  ${article.relevance === "high" ? `<span class="chip red">TURNER RELEVANT</span>` : ""}
+                  <span class="chip ${categoryChipClass(article.category)}">${escapeHtml(article.category || (uiLanguage === "vi" ? "Chung" : "General"))}</span>
+                  ${article.relevance === "high" ? `<span class="chip red">${uiLanguage === "vi" ? "LIÊN QUAN TURNER" : "TURNER RELEVANT"}</span>` : ""}
                 </div>
                 <div class="date">${escapeHtml(formatDate(articleDate(article)))}</div>
               </div>
 
               <h3>
-                <button class="article-open" data-id="${escapeHtml(article.id)}">
+                <button class="article-open" type="button" data-id="${escapeHtml(article.id)}">
                   ${escapeHtml(article.title)}
                 </button>
               </h3>
@@ -836,7 +839,7 @@
               <p class="excerpt">${escapeHtml(article.description || article.ai_summary || "")}</p>
 
               <div class="article-meta">
-                <span class="source">${escapeHtml(article.source_name || "Unknown source")}</span>
+                <span class="source">${escapeHtml(article.source_name || (uiLanguage === "vi" ? "Không rõ nguồn" : "Unknown source"))}</span>
                 <span>·</span>
                 ${relevanceHtml(article.relevance)}
                 ${article.author ? `<span>·</span><span>${escapeHtml(article.author)}</span>` : ""}
@@ -847,10 +850,6 @@
       });
 
       feed.innerHTML = html;
-
-      document.querySelectorAll(".article-open").forEach(btn => {
-        btn.addEventListener("click", () => openArticle(btn.dataset.id));
-      });
     }
 
     function placeholderImage() {
@@ -1152,6 +1151,21 @@ function closeArticlePage(pushState = true) {
     // ----------------------------------------------------------
     // Event bindings
     // ----------------------------------------------------------
+    $("feed").addEventListener("click", e => {
+      const openButton = e.target.closest(".article-open");
+      const row = e.target.closest(".article[data-article-id]");
+      const id = openButton?.dataset.id || row?.dataset.articleId;
+      if (!id) return;
+      openArticle(id);
+    });
+
+    $("feed").addEventListener("keydown", e => {
+      const row = e.target.closest(".article[data-article-id]");
+      if (!row || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      openArticle(row.dataset.articleId);
+    });
+
     $("searchInput").addEventListener("input", e => {
       searchTerm = e.target.value.trim();
       renderFeed();
@@ -1208,12 +1222,8 @@ function closeArticlePage(pushState = true) {
       toast("Theme control is ready for the next version.");
     });
 
-    $("modalClose").addEventListener("click", closeModal);
-    $("closeModalBtn").addEventListener("click", closeModal);
+    // Modal is intentionally not part of the News reading flow.
 
-    $("articleModal").addEventListener("click", e => {
-      if (e.target === $("articleModal")) closeModal();
-    });
 
     $("openSourceBtn").addEventListener("click", () => {
       if (!selectedArticle?.url) return;
@@ -1221,7 +1231,9 @@ function closeArticlePage(pushState = true) {
     });
 
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape") closeModal();
+      if (e.key === "Escape" && document.body.classList.contains("reading-mode")) {
+        closeArticlePage();
+      }
     });
 
     $("backToNewsBtn").addEventListener("click", () => closeArticlePage());
