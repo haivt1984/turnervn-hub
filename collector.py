@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v4.4-20260928"
+BUILD_VERSION = "batch-v5.0-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -976,6 +976,87 @@ async def fetch_html_candidate(url, source):
         "content_type": source.get("content_type", "NEWS"),
     }
 
+def discover_tech_blog_links(html, base_url, source_name):
+    links = []
+    seen = set()
+    host = urlparse(base_url).netloc.lower()
+
+    for m in re.finditer(
+        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
+        html,
+        flags=re.I,
+    ):
+        href = canonicalize_url(urljoin(base_url, unescape(m.group(1)).strip()))
+        title = clean_text(m.group(2))
+        if not href or len(title) < 12:
+            continue
+
+        parsed = urlparse(href)
+        if parsed.netloc.lower().replace("www.", "") != host.replace("www.", ""):
+            continue
+
+        path = parsed.path.lower().rstrip("/")
+        valid = False
+        if source_name == "Procore":
+            valid = "/blog/" in path and path not in {"/blog", "/en/blog", "/en-sg/blog"}
+        elif source_name == "OpenSpace":
+            valid = "/blog/" in path and "/page/" not in path and path != "/blog"
+        elif source_name == "DroneDeploy":
+            valid = "/blog/" in path and path != "/blog"
+
+        if not valid:
+            continue
+        if any(x in href.lower() for x in ("#", "/tag/", "/category/", "/author/", "/search")):
+            continue
+        if href in seen:
+            continue
+
+        seen.add(href)
+        links.append({
+            "url": href,
+            "title": truncate(title, MAX_TITLE_CHARS),
+            "published_at": None,
+        })
+        if len(links) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+    return links
+
+
+async def discover_tech_blog_batch(env, source):
+    page_url = source.get("page_url")
+    resp = await http_get(page_url, "text/html,application/xhtml+xml")
+    if not resp.ok:
+        return {
+            "source": source["name"],
+            "discovered": 0,
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [f"HTTP {resp.status}"],
+        }
+
+    html = await response_text(resp)
+    links = discover_tech_blog_links(html, page_url, source["name"])
+    source_id = await get_or_create_source(env, source)
+    try:
+        queued = await queue_articles_bulk(env, source_id, links)
+        return {
+            "source": source["name"],
+            "discovered": len(links),
+            "queued": queued,
+            "already_queued": max(len(links) - queued, 0),
+            "queue_errors": [],
+        }
+    except Exception as exc:
+        return {
+            "source": source["name"],
+            "discovered": len(links),
+            "queued": 0,
+            "already_queued": 0,
+            "queue_errors": [str(exc)],
+        }
+
+
 async def discover_tvpl_rss_batch(env, source):
     feed_url = source.get("feed_url")
     if not feed_url:
@@ -1888,6 +1969,8 @@ class Default(WorkerEntrypoint):
                     pages = min(int((q.get("pages") or [str(DISCOVERY_PAGES_PER_RUN)])[0]), DISCOVERY_PAGES_PER_RUN)
                     if source.get("name") == "Thu Vien Phap Luat":
                         result = await discover_tvpl_rss_batch(env, source)
+                    elif source.get("name") in {"Procore", "OpenSpace", "DroneDeploy"}:
+                        result = await discover_tech_blog_batch(env, source)
                     else:
                         result = await discover_moc_batch(env, source, start_page, pages)
                 else:
@@ -1963,8 +2046,15 @@ class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env, ctx):
         # Scheduled safe batches:
         # MOC = paginated full-content collection.
-        # TVPL = RSS discovery-only because detail pages return HTTP 403.
-        for source_name in ("Ministry of Construction", "Thu Vien Phap Luat"):
+        # TVPL = RSS discovery-only.
+        # Procore/OpenSpace/DroneDeploy = public blog discovery + batch processing.
+        for source_name in (
+            "Ministry of Construction",
+            "Thu Vien Phap Luat",
+            "Procore",
+            "OpenSpace",
+            "DroneDeploy",
+        ):
             source = next((s for s in SOURCES if s.get("name") == source_name), None)
             if not source:
                 continue
@@ -1972,6 +2062,8 @@ class Default(WorkerEntrypoint):
             try:
                 if source_name == "Thu Vien Phap Luat":
                     await discover_tvpl_rss_batch(env, source)
+                elif source_name in {"Procore", "OpenSpace", "DroneDeploy"}:
+                    await discover_tech_blog_batch(env, source)
                 else:
                     source_id = await get_or_create_source(env, source)
                     next_page = await get_source_pagination_page(env, source_id, 1)
