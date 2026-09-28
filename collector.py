@@ -65,6 +65,12 @@ SOURCES = [
         "page_url": "https://moc.gov.vn/",
         "discovery_url": "https://moc.gov.vn/vn/chuyen-muc/1205/tin-tuc.aspx",
         "feed_url": "",
+        "pagination": {
+            "enabled": True,
+            "url_template": "https://moc.gov.vn/vn/Pages/chuyenmuctin.aspx?ChuyenmucID=1173&page={page}&tieude=tin-hoat-dong.aspx",
+            "start_page": 1,
+            "max_pages": 20
+        },
         "feed_urls": [
             "https://moc.gov.vn/rss/1176/tin-chi-dao--dieu-hanh.rss",
             "https://moc.gov.vn/rss/1173/tin-hoat-dong.rss",
@@ -974,6 +980,67 @@ async def crawl_multi_feed_source(source):
     return combined[:MAX_ARTICLES_PER_SOURCE]
 
 
+async def crawl_pagination_source(source):
+    config = source.get("pagination") or {}
+    if not config.get("enabled"):
+        return []
+
+    results = []
+    seen = set()
+    start_page = int(config.get("start_page", 1))
+    max_pages = int(config.get("max_pages", 20))
+    template = config.get("url_template", "")
+
+    for page_number in range(start_page, start_page + max_pages):
+        if len(results) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+        page_url = template.format(page=page_number)
+
+        try:
+            resp = await http_get(page_url, "text/html,application/xhtml+xml")
+            if not resp.ok:
+                print("pagination page failed:", source["name"], page_number, resp.status)
+                continue
+
+            html = await response_text(resp)
+            links = discover_html_links(html, page_url, source)
+
+            if not links:
+                # Stop when a page no longer contains article links.
+                if page_number > start_page:
+                    break
+                continue
+
+            page_new = 0
+            for url, label in links:
+                key = canonicalize_url(url)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                try:
+                    item = await fetch_html_candidate(url, source)
+                    if not item.get("title"):
+                        item["title"] = truncate(label, MAX_TITLE_CHARS)
+                    if item.get("title"):
+                        results.append(item)
+                        page_new += 1
+                except Exception as exc:
+                    print("pagination article failed:", source["name"], url, str(exc))
+
+                if len(results) >= MAX_ARTICLES_PER_SOURCE:
+                    break
+
+            if page_new == 0 and page_number > start_page:
+                break
+
+        except Exception as exc:
+            print("pagination error:", source["name"], page_number, str(exc))
+
+    return results[:MAX_ARTICLES_PER_SOURCE]
+
+
 async def crawl_one_source(env, source):
     source_id = await get_or_create_source(env, source)
     started = now_iso()
@@ -987,12 +1054,34 @@ async def crawl_one_source(env, source):
     error_message = None
 
     try:
+        items = []
+
         if source.get("feed_urls"):
-            items = await crawl_multi_feed_source(source)
-        elif source.get("feed_url"):
+            items.extend(await crawl_multi_feed_source(source))
+
+        if source.get("pagination", {}).get("enabled") and len(items) < MAX_ARTICLES_PER_SOURCE:
+            pagination_items = await crawl_pagination_source(source)
+            seen_urls = {canonicalize_url(x.get("url", "")) for x in items}
+            for item in pagination_items:
+                key = canonicalize_url(item.get("url", ""))
+                if key and key not in seen_urls:
+                    seen_urls.add(key)
+                    items.append(item)
+
+        if not source.get("feed_urls") and source.get("feed_url"):
             items = await crawl_rss_source(source)
-        else:
+
+        if not source.get("feed_urls") and not source.get("feed_url") and not source.get("pagination", {}).get("enabled"):
             items = await crawl_html_source(source)
+
+        def _item_ts(value):
+            try:
+                return datetime.fromisoformat((value or "").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return 0
+
+        items.sort(key=lambda x: _item_ts(x.get("published_at")), reverse=True)
+        items = items[:MAX_ARTICLES_PER_SOURCE]
 
         found = len(items)
         for item in items:
