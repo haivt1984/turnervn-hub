@@ -56,7 +56,7 @@ PROCESS_BATCH_SIZE = 3
 # Cloudflare Cron schedules are UTC.
 # Example: 0 * * * * = every hour on the hour.
 CRON_SCHEDULE = "0 * * * *"
-BUILD_VERSION = "batch-v3.0-20260928"
+BUILD_VERSION = "batch-v3.1-20260928"
 
 # Add/edit sources here. For the most reliable ingestion, fill feed_url
 # with an official RSS/Atom feed. When feed_url is empty, the collector
@@ -90,8 +90,14 @@ SOURCES = [
     },
     {
         "name": "Thu Vien Phap Luat",
-        "page_url": "https://thuvienphapluat.vn/",
+        "page_url": "https://thuvienphapluat.vn/van-ban-moi",
         "feed_url": "",
+        "pagination": {
+            "enabled": True,
+            "url_template": "https://thuvienphapluat.vn/van-ban-moi?page={page}",
+            "start_page": 1,
+            "max_pages": 10
+        },
         "category": "Legal & Regulation",
         "content_type": "LEGAL",
         "active": True,
@@ -820,6 +826,70 @@ def discover_moc_article_links(html, base_url):
     return links
 
 
+def discover_tvpl_article_links(html, base_url):
+    links = []
+    seen = set()
+
+    for match in re.finditer(
+        r'<a[^>]+href=["\']([^"\']+\.aspx(?:\?[^"\']*)?)["\'][^>]*>([\s\S]*?)</a>',
+        html,
+        flags=re.I,
+    ):
+        href = urljoin(base_url, unescape(match.group(1)).strip())
+        title = clean_text(match.group(2))
+
+        if not href.startswith(("http://", "https://")):
+            continue
+
+        parsed = urlparse(href)
+        if parsed.netloc.lower() not in {"thuvienphapluat.vn", "www.thuvienphapluat.vn"}:
+            continue
+
+        path = parsed.path.lower()
+        if not path.startswith("/van-ban/") or not path.endswith(".aspx"):
+            continue
+
+        # Skip obvious utility/download links if present.
+        low = href.lower()
+        if any(x in low for x in ("/download", "/print", "/login", "/search")):
+            continue
+
+        canonical = canonicalize_url(href)
+        if canonical in seen or len(title) < 8:
+            continue
+
+        local = html[max(0, match.start() - 900):min(len(html), match.end() + 1500)]
+        local_text = clean_text(unescape(local))
+
+        published_at = None
+        dm = re.findall(
+            r'Ban hành:\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})',
+            local_text,
+            flags=re.I,
+        )
+        if dm:
+            day, month, year = [int(x) for x in dm[-1]]
+            try:
+                published_at = datetime(
+                    year, month, day,
+                    tzinfo=timezone(timedelta(hours=7)),
+                ).isoformat()
+            except Exception:
+                published_at = None
+
+        seen.add(canonical)
+        links.append({
+            "url": canonical,
+            "title": title,
+            "published_at": published_at,
+        })
+
+        if len(links) >= MAX_ARTICLES_PER_SOURCE:
+            break
+
+    return links
+
+
 def discover_html_links(html, base_url, source=None):
     links = []
     seen = set()
@@ -1460,10 +1530,16 @@ async def crawl_pagination_source(source):
 
             html = await response_text(resp)
             pages_visited += 1
-            raw_links_seen += len(re.findall(r'chitiettin\\.aspx|/vn/tin-tuc/', html, flags=re.I))
-            links = discover_moc_article_links(html, page_url)
+            raw_links_seen += len(re.findall(r'chitiettin\\.aspx|/vn/tin-tuc/|/van-ban/[^"<>\\s]+\\.aspx', html, flags=re.I))
+            if source.get("name") == "Ministry of Construction":
+                links = discover_moc_article_links(html, page_url)
+            elif source.get("name") == "Thu Vien Phap Luat":
+                links = discover_tvpl_article_links(html, page_url)
+            else:
+                links = discover_html_links(html, page_url, source)
 
-            for url, label in links:
+            for entry in links:
+                url = entry.get("url")
                 key = canonicalize_url(url)
                 if not key or key in seen:
                     continue
@@ -1471,12 +1547,14 @@ async def crawl_pagination_source(source):
 
                 try:
                     item = await fetch_html_candidate(url, source)
-                    if not item.get("title"):
-                        item["title"] = truncate(label, MAX_TITLE_CHARS)
+                    if entry.get("title") and not item.get("title"):
+                        item["title"] = entry.get("title")
+                    if entry.get("published_at"):
+                        item["published_at"] = entry.get("published_at")
                     if item.get("title"):
                         results.append(item)
                 except Exception as exc:
-                    print("MOC pagination article failed:", url, str(exc))
+                    print("pagination article failed:", source.get("name"), url, str(exc))
 
                 if len(results) >= MAX_ARTICLES_PER_SOURCE:
                     break
@@ -1813,12 +1891,27 @@ class Default(WorkerEntrypoint):
             )
 
     async def scheduled(self, controller, env, ctx):
-        # Safe scheduled MOC batches. Persist the next listing page so Cron
-        # advances through the site instead of rediscovering page 1 forever.
-        moc = next((s for s in SOURCES if s.get("name") == "Ministry of Construction"), None)
-        if moc:
-            source_id = await get_or_create_source(env, moc)
+        # Safe scheduled batches for MOC and TVPL.
+        for source_name in ("Ministry of Construction", "Thu Vien Phap Luat"):
+            source = next((s for s in SOURCES if s.get("name") == source_name), None)
+            if not source:
+                continue
+
+            source_id = await get_or_create_source(env, source)
             next_page = await get_source_pagination_page(env, source_id, 1)
-            await discover_moc_batch(env, moc, next_page, DISCOVERY_PAGES_PER_RUN)
-            await set_source_pagination_page(env, source_id, next_page + DISCOVERY_PAGES_PER_RUN)
-            await process_queue_batch(env, moc, PROCESS_BATCH_SIZE)
+
+            try:
+                await discover_moc_batch(
+                    env, source, next_page, DISCOVERY_PAGES_PER_RUN
+                )
+                await set_source_pagination_page(
+                    env, source_id, next_page + DISCOVERY_PAGES_PER_RUN
+                )
+            except Exception as exc:
+                print("scheduled discovery failed:", source_name, str(exc))
+
+            try:
+                await process_queue_batch(env, source, PROCESS_BATCH_SIZE)
+            except Exception as exc:
+                print("scheduled processing failed:", source_name, str(exc))
+
